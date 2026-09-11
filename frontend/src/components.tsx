@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "./api";
+import { AlertCircle, CheckCircle2, Clock3, LoaderCircle } from "lucide-react";
 
 export function StatusBadge({ status }: { status: string }) {
   const cls =
@@ -10,15 +11,16 @@ export function StatusBadge({ status }: { status: string }) {
         : status === "PROCESSING"
           ? "badge-processing"
           : "badge-pending";
-  return <span className={cls}>{status}</span>;
+  const Icon = status === "COMPLETED" ? CheckCircle2 : status === "FAILED" ? AlertCircle : status === "PROCESSING" ? LoaderCircle : Clock3;
+  return <span className={cls}><Icon size={13} className={status === "PROCESSING" ? "animate-spin" : ""} />{status}</span>;
 }
 
 export function ErrorBanner({ error }: { error: unknown }) {
   if (!error) return null;
   const msg = error instanceof ApiError ? error.message : String(error);
   return (
-    <div className="card border-red-200 bg-red-50 text-red-700 mb-4 text-sm">
-      ❌ {msg}
+    <div className="card border-red-200 bg-red-50/80 text-red-700 mb-4 text-sm flex items-start gap-2">
+      <AlertCircle size={18} className="shrink-0 mt-0.5" /> <span>{msg}</span>
     </div>
   );
 }

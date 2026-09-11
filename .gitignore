@@ -1,44 +1,39 @@
-# 虚拟环境
+# Python / venv
 .venv/
 venv/
 env/
-
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# 环境变量
+# Environment
 .env
 .env.local
-.env.*.local
 !.env.example
 
-# 数据（简历文件，按 design.md §5 git ignore）
-data/resumes/*
-!data/resumes/.gitkeep
+# Local runtime data
+backend/.venv/
+backend/data/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.playwright-installed
 
-# IDE
-.vscode/
-.idea/
-*.swp
-.DS_Store
-
-# 日志
-*.log
-logs/
-
-# 前端（后续 W4 周再加）
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
-frontend/tsconfig.tsbuildinfo
-backend/.pytest_cache/
-backend/alembic/__pycache__/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Keep resume folder structure
+!data/.gitkeep
+!data/resumes/.gitkeep

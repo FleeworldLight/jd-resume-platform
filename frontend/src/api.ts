@@ -36,11 +36,31 @@ async function request<T>(
     body: payload,
     ...init,
   });
+
+  if (res.status === 204) return undefined as T;
+
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+  if (!contentType.includes("application/json")) {
+    throw new ApiError(
+      res.status || -1,
+      `接口返回了非 JSON 内容 (HTTP ${res.status})`,
+      text.slice(0, 200),
+    );
+  }
+
+  if (!text.trim()) {
+    throw new ApiError(res.status || -1, `接口返回空内容 (HTTP ${res.status})`);
+  }
+
   let json: Result<T>;
   try {
-    json = (await res.json()) as Result<T>;
+    json = JSON.parse(text) as Result<T>;
   } catch (e) {
     throw new ApiError(-1, `响应解析失败: ${e}`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, json.message || `请求失败 (HTTP ${res.status})`, json.data);
   }
   if (json.code !== 0) {
     throw new ApiError(json.code, json.message, json.data);
