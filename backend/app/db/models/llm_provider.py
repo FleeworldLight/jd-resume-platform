@@ -1,7 +1,7 @@
 """LLM Provider 模型。"""
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, String, Text
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -10,7 +10,7 @@ from app.db.base import Base, TimestampMixin
 class LlmProvider(Base, TimestampMixin):
     __tablename__ = "llm_providers"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     provider_type: Mapped[str] = mapped_column(String(32), nullable=False)
 

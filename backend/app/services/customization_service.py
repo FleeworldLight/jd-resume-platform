@@ -81,7 +81,7 @@ class CustomizationService:
         await self.db.commit()
         return result.rowcount > 0
 
-    # ---------- 主执行（Celery 调） ----------
+    # ---------- 主执行 ----------
     async def execute(
         self, customization_id: int, question_count: int = 5
     ) -> None:

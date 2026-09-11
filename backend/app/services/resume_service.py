@@ -57,18 +57,42 @@ class ResumeService:
         resume = await self._save_and_create(content, file.filename or "resume", content_hash)
         logger.info("resume.uploaded", resume_id=resume.id, filename=resume.original_filename)
 
-        # 触发异步解析 + 建索引
+        # 同步解析 + 建索引（无 Celery）
         try:
-            from app.tasks.resume_tasks import index_resume_task, parse_resume_task
-
-            parse_resume_task.delay(resume.id)
-            index_resume_task.delay(resume.id)
-        except Exception as exc:  # noqa: BLE001
-            # broker 不可用时降级为同步（开发环境友好）
-            logger.warning("celery.broker_unavailable", error=str(exc))
             await self.parse_and_update(resume.id)
-            # 索引需要 LLM，没有就跳过
+        except BusinessException as exc:
+            logger.warning(
+                "resume.parse_failed_on_upload",
+                resume_id=resume.id,
+                error=exc.message,
+            )
+        resume = await self.get(resume.id)
+        if resume.parse_status == "COMPLETED" and resume.resume_text:
+            await self._index_resume_embedding(resume.id)
         return resume
+
+    async def _index_resume_embedding(self, resume_id: int) -> None:
+        """为简历生成 embedding 并写入向量索引。
+
+        没配 provider / 外部 API 失败都不阻断上传——直接跳过并告警。
+        """
+        resume = await self.get(resume_id)
+        if not resume.resume_text:
+            return
+        try:
+            from app.services.llm_service import LLMService
+            from app.services.retrieval_service import RetrievalService
+
+            llm = LLMService(self.db)
+            embed_model = await llm.get_embedding_model()
+            embedding = await embed_model.aembed_query(resume.resume_text)
+            await RetrievalService(self.db).index_resume(
+                resume.id, resume.resume_text, embedding
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "resume.index_skipped", resume_id=resume_id, error=str(exc)
+            )
 
     def _validate_file(self, file: UploadFile) -> None:
         # content_type 可能不可靠（浏览器/客户端不同），用扩展名兜底
@@ -175,7 +199,7 @@ class ResumeService:
         await self.db.commit()
         logger.info("resume.deleted", resume_id=resume_id)
 
-    # ---------- 解析（同步版本，Celery 任务里调用） ----------
+    # ---------- 解析（同步版本） ----------
     async def parse_and_update(self, resume_id: int) -> None:
         """从文件解析文本，写回 resume_text 与状态。"""
         resume = await self.get(resume_id)
@@ -205,12 +229,15 @@ class ResumeService:
             ) from exc
 
     async def reparse(self, resume_id: int) -> None:
-        """强制重新解析（清空状态后重跑）。"""
+        """强制重新解析（清空状态后重跑）+ 重建索引。"""
         resume = await self.get(resume_id)
         resume.parse_status = "PENDING"
         resume.parse_error = None
         await self.db.commit()
         await self.parse_and_update(resume_id)
+        resume = await self.get(resume_id)
+        if resume.parse_status == "COMPLETED" and resume.resume_text:
+            await self._index_resume_embedding(resume_id)
 
     async def _extract_text(self, storage_path: str | None, filename: str) -> str:
         if not storage_path:

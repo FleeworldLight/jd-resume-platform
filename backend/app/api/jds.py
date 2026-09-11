@@ -4,11 +4,10 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_llm_service
-from app.core.rate_limit import limiter
 from app.core.result import Result
 from app.schemas.jd import (
     JdList,
@@ -31,9 +30,7 @@ def _service(
 
 
 @router.post("/text", response_model=Result[JdResponse])
-@limiter.limit("10/minute")
 async def submit_jd_text(
-    request: Request,
     body: JdTextRequest,
     service: JdService = Depends(_service),
 ) -> Result[JdResponse]:
@@ -42,23 +39,41 @@ async def submit_jd_text(
 
 
 @router.post("/url", response_model=Result[JdResponse])
-@limiter.limit("2/second")
 async def submit_jd_url(
-    request: Request,
     body: JdUrlRequest,
     service: JdService = Depends(_service),
 ) -> Result[JdResponse]:
-    jd = await service.create_from_url(body.url)
-    # Celery 触发：失败降级为同步抓取（开发环境友好）
-    try:
-        from app.tasks.jd_tasks import crawl_jd_task
+    from app.core.config import settings
 
-        crawl_jd_task.delay(jd.id)
-    except Exception:  # noqa: BLE001
-        # broker 没起，直接同步跑
-        await service.crawl_and_update(jd.id)
-        jd = await service.get(jd.id)
+    if not settings.crawler_enabled:
+        # 爬虫未启用：直接拒绝，提示用户粘贴
+        from app.core.exceptions import BusinessException, ErrorCode
+
+        raise BusinessException(
+            ErrorCode.UNSUPPORTED_JD_SOURCE,
+            "URL 抓取未启用（CRAWLER_ENABLED=0），请粘贴 JD 文本",
+        )
+    jd = await service.create_from_url(body.url)
+    # 同步抓取（无 Celery）
+    await service.crawl_and_update(jd.id)
+    jd = await service.get(jd.id)
     return Result.ok(JdResponse.model_validate(jd))
+
+
+@router.post("/import-nowcoder", response_model=Result[list[JdResponse]])
+async def import_nowcoder_jobs(
+    listing_url: str = "https://www.nowcoder.com/jobs/school/jobs",
+    limit: int = 10,
+    service: JdService = Depends(_service),
+) -> Result[list[JdResponse]]:
+    from app.core.config import settings
+
+    if not settings.crawler_enabled:
+        from app.core.exceptions import BusinessException, ErrorCode
+
+        raise BusinessException(ErrorCode.UNSUPPORTED_JD_SOURCE, "URL 抓取未启用")
+    jobs = await service.import_nowcoder_jobs(listing_url, limit=limit)
+    return Result.ok([JdResponse.model_validate(job) for job in jobs])
 
 
 @router.get("", response_model=Result[JdList])

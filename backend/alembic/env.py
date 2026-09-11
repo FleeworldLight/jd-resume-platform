@@ -1,28 +1,32 @@
-"""Alembic 环境配置。
-
-设计文档 §4 / §12：V1 迁移需要创建所有表 + pgvector 扩展 + ivfflat 索引。
-"""
+"""Alembic 环境配置（SQLite / 通用，无 PG 扩展）。"""
 from __future__ import annotations
 
+import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 # 让 alembic 能找到 app 包
-import os
-import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.config import settings
-from app.db.base import Base
+from app.core.config import settings  # noqa: E402
+from app.db.base import Base  # noqa: E402
 # 必须 import 所有模型，确保 metadata 注册
-from app.db import models  # noqa: F401
+from app.db import models  # noqa: E402, F401
 
 config = context.config
 
 # 用 settings 里的同步 URL 覆盖
 config.set_main_option("sqlalchemy.url", settings.database_sync_url)
+
+# SQLite：确保数据目录存在
+if settings.database_sync_url.startswith("sqlite"):
+    _db_path = settings.database_sync_url.split("///", 1)[-1]
+    if _db_path and _db_path != ":memory:":
+        Path(_db_path).parent.mkdir(parents=True, exist_ok=True)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

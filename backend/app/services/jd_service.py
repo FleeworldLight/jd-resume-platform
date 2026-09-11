@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging import get_logger
 from app.crawler.factory import detect_source, get_crawler
+from app.crawler.strategies.nowcoder import NowcoderCrawler
 from app.db.models.jd import Jd
 from app.prompts import JD_EXTRACT_PROMPT_V1
 from app.schemas.llm_output import JdStructured
@@ -51,7 +52,7 @@ class JdService:
         return jd
 
     async def create_from_url(self, url: str) -> Jd:
-        """提交 URL：先建记录（PENDING），由 Celery 异步抓取 + 结构化。"""
+        """提交 URL：先建记录（PENDING），随后同步抓取 + 结构化。"""
         source = detect_source(url)
         jd = Jd(
             source=source,
@@ -64,6 +65,33 @@ class JdService:
         await self.db.refresh(jd)
         logger.info("jd.url_submitted", jd_id=jd.id, source=source)
         return jd
+
+    async def import_nowcoder_jobs(self, listing_url: str, limit: int = 10) -> list[Jd]:
+        """抓取牛客校招职位列表，并导入职位详情。"""
+        urls = await NowcoderCrawler().list_job_urls(listing_url, limit=limit)
+        imported: list[Jd] = []
+        for url in urls:
+            existing = (await self.db.execute(select(Jd).where(Jd.source_url == url))).scalar_one_or_none()
+            if existing is not None:
+                if existing.source == "NOWCODER" and existing.crawl_status == "COMPLETED" and not existing.position:
+                    existing.crawl_status = "PENDING"
+                    await self.db.commit()
+                    try:
+                        await self.crawl_and_update(existing.id)
+                    except BusinessException:
+                        pass
+                    existing = await self.get(existing.id)
+                imported.append(existing)
+                continue
+            jd = await self.create_from_url(url)
+            try:
+                await self.crawl_and_update(jd.id)
+            except BusinessException:
+                jd = await self.get(jd.id)
+            else:
+                jd = await self.get(jd.id)
+            imported.append(jd)
+        return imported
 
     # ---------- 查询 ----------
     async def get(self, jd_id: int) -> Jd:
@@ -97,7 +125,7 @@ class JdService:
         await self.db.commit()
         logger.info("jd.deleted", jd_id=jd_id)
 
-    # ---------- 抓取（由 Celery 任务调用） ----------
+    # ---------- 抓取（同步） ----------
     async def crawl_and_update(self, jd_id: int) -> None:
         """抓取 URL 原文 + 落库 + 触发结构化。"""
         jd = await self.get(jd_id)
@@ -117,6 +145,11 @@ class JdService:
                     ErrorCode.JD_CRAWL_FAILED, "抓取内容为空或过短"
                 )
             jd.raw_text = raw_text
+            metadata = getattr(strategy, "metadata", {})
+            for field in ("company", "position", "salary_min", "salary_max", "city", "education", "experience"):
+                value = metadata.get(field)
+                if value is not None:
+                    setattr(jd, field, value)
             jd.crawl_status = "PARSED"
             await self.db.commit()
             logger.info("jd.crawled", jd_id=jd_id, length=len(raw_text))
@@ -162,13 +195,13 @@ class JdService:
         logger.info("jd.structured", jd_id=jd_id)
 
     def _apply_structured(self, jd: Jd, s: JdStructured) -> None:
-        jd.company = s.company
-        jd.position = s.position
-        jd.salary_min = s.salary_min
-        jd.salary_max = s.salary_max
-        jd.city = s.city
-        jd.experience = s.experience
-        jd.education = s.education
+        jd.company = s.company or jd.company
+        jd.position = s.position or jd.position
+        jd.salary_min = s.salary_min if s.salary_min is not None else jd.salary_min
+        jd.salary_max = s.salary_max if s.salary_max is not None else jd.salary_max
+        jd.city = s.city or jd.city
+        jd.experience = s.experience or jd.experience
+        jd.education = s.education or jd.education
         jd.skills = s.skills
         jd.responsibilities = s.responsibilities
         jd.requirements = s.requirements

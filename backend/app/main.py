@@ -1,7 +1,6 @@
 """FastAPI 入口。
 
-W1 目标：hello world 跑起来。
-W2：挂载简历 / JD API + 全局异常处理（BusinessException + 422 + 限流）。
+本地极简版：SQLite 零外部服务；启动时自动建表 + seed mock provider。
 """
 from __future__ import annotations
 
@@ -12,7 +11,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi.errors import RateLimitExceeded
 
 from app.api.customizations import router as customizations_router
 from app.api.jds import router as jds_router
@@ -21,8 +19,8 @@ from app.api.resumes import router as resumes_router
 from app.core.config import settings
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging import get_logger, new_trace_id, setup_logging
-from app.core.rate_limit import limiter
 from app.core.result import Result
+from app.db.init_db import init_db
 from app.db.session import close_db, engine
 
 setup_logging()
@@ -32,6 +30,7 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logger.info("app.startup", name=settings.app_name, version=settings.app_version)
+    await init_db()
     yield
     await close_db()
     logger.info("app.shutdown")
@@ -54,9 +53,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# slowapi 状态
-app.state.limiter = limiter
-
 
 # ---------- 全局异常处理 ----------
 @app.exception_handler(BusinessException)
@@ -77,14 +73,6 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
     return JSONResponse(
         status_code=200,
         content=Result.fail(code=ErrorCode.INVALID_PARAMS, message=msg or "参数校验失败").model_dump(),
-    )
-
-
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(_request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=200,
-        content=Result.fail(code=ErrorCode.RATE_LIMITED, message="请求过于频繁").model_dump(),
     )
 
 

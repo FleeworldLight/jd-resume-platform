@@ -4,12 +4,11 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_llm_service
-from app.core.rate_limit import limiter
 from app.core.result import Result
 from app.schemas.customization import (
     CustomizationCreateRequest,
@@ -32,21 +31,14 @@ def _service(
 
 
 @router.post("", response_model=Result[CustomizationResponse])
-@limiter.limit("5/minute")
 async def create_customization(
-    request: Request,
     body: CustomizationCreateRequest,
     service: CustomizationService = Depends(_service),
 ) -> Result[CustomizationResponse]:
     c = await service.create(body.jd_id, body.base_resume_id, body.question_count)
-    # Celery 触发；broker 不可用时降级为同步执行
-    try:
-        from app.tasks.customization_tasks import customize_resume_task
-
-        customize_resume_task.delay(c.id)
-    except Exception:  # noqa: BLE001
-        await service.execute(c.id, question_count=body.question_count)
-        c = await service.get(c.id)
+    # 同步执行完整流水线（无 Celery），本地可能耗时数十秒
+    await service.execute(c.id, question_count=body.question_count)
+    c = await service.get(c.id)
     return Result.ok(CustomizationResponse.model_validate(c))
 
 
@@ -92,14 +84,9 @@ async def retry_customization(
     service: CustomizationService = Depends(_service),
 ) -> Result[None]:
     await service.retry(customization_id)
-    # 触发一次执行
-    try:
-        from app.tasks.customization_tasks import customize_resume_task
-
-        customize_resume_task.delay(customization_id)
-    except Exception:  # noqa: BLE001
-        await service.execute(customization_id)
-    return Result.ok(message="重试任务已提交")
+    # 同步重跑一次
+    await service.execute(customization_id)
+    return Result.ok(message="重试成功")
 
 
 @router.get("/{customization_id}/status", response_model=Result[CustomizationStatusResponse])

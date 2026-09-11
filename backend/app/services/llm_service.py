@@ -5,14 +5,14 @@ LLM Provider 数据从 DB 读取（llm_providers 表）。
 """
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, TypeVar, get_args, get_origin
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
 from app.core.exceptions import BusinessException, ErrorCode
@@ -62,11 +62,6 @@ class LLMService:
         provider = provider or await self.get_default_provider()
         return _build_chat_model(provider)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
     async def structured_invoke(
         self,
         prompt_template: ChatPromptTemplate,
@@ -76,8 +71,14 @@ class LLMService:
     ) -> T:
         """调用 LLM 并返回结构化输出。
 
-        失败由 tenacity 自动重试 3 次；最终失败抛 BusinessException。
+        - provider 为 mock 时：不调外部 API，直接按 schema 生成一份占位结果（离线可用）
+        - 真实 provider：LangChain with_structured_output；失败抛 BusinessException
         """
+        provider = provider or await self.get_default_provider()
+        if provider.provider_type == "mock":
+            logger.info("llm.mock_output", schema=output_schema.__name__)
+            return _build_mock_output(output_schema)
+
         chat = await self.get_chat_model(provider)
         try:
             structured = chat.with_structured_output(output_schema)
@@ -89,7 +90,7 @@ class LLMService:
             logger.error(
                 "llm.invoke_failed",
                 error=str(exc),
-                provider=provider.name if provider else "default",
+                provider=provider.name,
             )
             raise BusinessException(
                 ErrorCode.LLM_INVOKE_FAILED, f"LLM 调用失败: {exc}"
@@ -156,3 +157,53 @@ def _build_embedding_model(provider: LlmProvider):
         ErrorCode.LLM_PROVIDER_TYPE_UNKNOWN,
         f"Embedding 不支持 provider_type: {provider.provider_type}",
     )
+
+
+# ---------- mock 结构化输出 ----------
+def _mock_field_value(annotation: Any, field: Any) -> Any:
+    """递归地为一个 Pydantic 字段生成合法占位值。"""
+    # 字段自带默认值/工厂 → 直接用（保持结构完整、列表为空等）
+    if field.default is not PydanticUndefined:
+        return field.default
+    if field.default_factory is not PydanticUndefined:
+        return field.default_factory()
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is not None and type(None) in args:
+        # Optional[X] → 给一个 X 的 mock（避免下游拿 None 炸）
+        for a in args:
+            if a is not type(None):
+                return _mock_field_value(a, field)
+        return None
+
+    if origin is list:
+        elem = args[0] if args else Any
+        return [_mock_field_value(elem, field)]
+
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation(**_mock_kwargs(annotation))
+
+    # 标量
+    if annotation is str:
+        return "（mock 占位）"
+    if annotation is int:
+        return 0
+    if annotation is float:
+        return 0.0
+    if annotation is bool:
+        return False
+    return None
+
+
+def _mock_kwargs(model: type[BaseModel]) -> dict[str, Any]:
+    return {
+        name: _mock_field_value(f.annotation, f)
+        for name, f in model.model_fields.items()
+    }
+
+
+def _build_mock_output(output_schema: type[T]) -> T:
+    """mock provider：返回一份能通过校验的占位结果（不调任何外部 API）。"""
+    return output_schema(**_mock_kwargs(output_schema))

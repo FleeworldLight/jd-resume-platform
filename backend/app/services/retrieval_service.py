@@ -1,20 +1,24 @@
-"""召回引擎：pgvector 向量 + PG tsvector 关键词，混合打分。
+"""召回引擎：纯 Python（numpy cosine + 关键词 Jaccard），不依赖任何 PG 扩展。
 
-设计文档 §6.2 + docs/architecture/retrieval.md。
+SQLite 本地版：embedding 以 numpy float32 字节流存 resume_vectors.embedding，
+Python 端算 cosine；关键词存 JSON，Python 端算 Jaccard。数据量小（<1000）性能足够。
 """
 from __future__ import annotations
 
-import json
+import re
 from dataclasses import dataclass
 
-from sqlalchemy import text
+import numpy as np
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging import get_logger
+from app.db.models.resume_vector import ResumeVector
 
 logger = get_logger(__name__)
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 @dataclass
@@ -44,10 +48,44 @@ class RetrievalResult:
         }
 
 
-class RetrievalService:
-    """向量 + 关键词混合召回。"""
+def _pack(vec: list[float]) -> bytes:
+    """numpy float32 数组 → bytes。"""
+    return np.asarray(vec, dtype=np.float32).tobytes()
 
-    # 设计文档 §4.3：0.6 向量 + 0.4 关键词
+
+def _unpack(blob: bytes) -> np.ndarray:
+    """bytes → numpy float32 数组。"""
+    return np.frombuffer(blob, dtype=np.float32)
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """cosine 相似度。"""
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _tokenize(text: str) -> set[str]:
+    """把文本切成 token 集合：英文按词，中文按相邻二元组。"""
+    text = (text or "").lower()
+    tokens: set[str] = set(re.findall(r"[a-z0-9_+#.]+", text))
+    cjk = _CJK_RE.findall(text)
+    tokens.update("".join(cjk[i : i + 2]) for i in range(len(cjk) - 1))
+    tokens.discard("")
+    return tokens
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+class RetrievalService:
+    """向量 + 关键词混合召回（纯 Python）。"""
+
     VECTOR_WEIGHT = 0.6
     KEYWORD_WEIGHT = 0.4
 
@@ -62,23 +100,30 @@ class RetrievalService:
         embedding: list[float],
         keywords: list[str] | None = None,
     ) -> None:
-        """为简历建立索引：写 embedding + 关键词，触发器自动建 tsvector。"""
-        kw_json = json.dumps(keywords or [], ensure_ascii=False)
-        emb_str = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"
-        sql = text(
-            """
-            INSERT INTO resume_vectors (resume_id, embedding, keywords, updated_at)
-            VALUES (:rid, :emb::vector, :kw::jsonb, now())
-            ON CONFLICT (resume_id) DO UPDATE
-                SET embedding = EXCLUDED.embedding,
-                    keywords = EXCLUDED.keywords,
-                    updated_at = now()
-            """
-        )
-        try:
+        """为简历建立索引：upsert embedding + 关键词。"""
+        # 没给关键词时，从原文自动抽 token 兜底
+        if keywords is None:
+            keywords = sorted(_tokenize(text_content))[:500]
+
+        row = (
             await self.db.execute(
-                sql, {"rid": resume_id, "emb": emb_str, "kw": kw_json}
+                select(ResumeVector).where(ResumeVector.resume_id == resume_id)
             )
+        ).scalar_one_or_none()
+        blob = _pack(embedding)
+
+        if row is None:
+            self.db.add(
+                ResumeVector(
+                    resume_id=resume_id,
+                    embedding=blob,
+                    keywords=keywords,
+                )
+            )
+        else:
+            row.embedding = blob
+            row.keywords = keywords
+        try:
             await self.db.commit()
             logger.info("retrieval.indexed", resume_id=resume_id)
         except Exception as exc:  # noqa: BLE001
@@ -91,72 +136,58 @@ class RetrievalService:
     async def vector_search(
         self, query: str, top_k: int, query_embedding: list[float] | None = None
     ) -> list[ResumeScore]:
-        """纯向量召回。query_embedding 已有就直接用，否则需传 EmbeddingService 算。"""
+        """纯向量召回：Python 端算 cosine。"""
         if query_embedding is None:
             raise BusinessException(
                 ErrorCode.RETRIEVAL_FAILED,
                 "vector_search 需要 query_embedding 参数",
             )
-        emb_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
-        sql = text(
-            """
-            SELECT resume_id,
-                   1 - (embedding <=> CAST(:query_vec AS vector)) AS score
-            FROM resume_vectors
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:query_vec AS vector)
-            LIMIT :top_k
-            """
-        )
-        rows = (await self.db.execute(
-            sql, {"query_vec": emb_str, "top_k": top_k}
-        )).fetchall()
-        return [ResumeScore(resume_id=int(r[0]), score=float(r[1])) for r in rows]
+        q_vec = np.asarray(query_embedding, dtype=np.float32)
+
+        rows = (
+            await self.db.execute(
+                select(ResumeVector.resume_id, ResumeVector.embedding).where(
+                    ResumeVector.embedding.is_not(None)
+                )
+            )
+        ).fetchall()
+
+        scored: list[ResumeScore] = []
+        for rid, blob in rows:
+            if not blob:
+                continue
+            try:
+                v = _unpack(blob)
+            except Exception:  # noqa: BLE001
+                continue
+            s = _cosine(q_vec, v)
+            scored.append(ResumeScore(resume_id=int(rid), score=s))
+
+        scored.sort(key=lambda x: x.score, reverse=True)
+        return scored[:top_k]
 
     # ---------- 关键词召回 ----------
     async def keyword_search(
         self, query: str, top_k: int
     ) -> list[ResumeScore]:
-        """纯关键词召回（PG tsvector + ts_rank_cd）。
+        """纯关键词召回：对每条已索引简历算 query 与关键词的 Jaccard。"""
+        q_tokens = _tokenize(query)
 
-        需要 zhparser 扩展（生产），无 zhparser 时 'simple' 词典兜底（中文按字）。
-        """
-        # simple vs chinese：默认按文档用 chinese；用户未装则 simple 也能跑
-        ts_config = "chinese"
-        sql = text(
-            f"""
-            SELECT resume_id,
-                   ts_rank_cd(search_tsv, query) AS score
-            FROM resume_vectors, plainto_tsquery('{ts_config}', :query) AS query
-            WHERE search_tsv @@ query
-            ORDER BY score DESC
-            LIMIT :top_k
-            """
-        )
-        try:
-            rows = (await self.db.execute(
-                sql, {"query": query, "top_k": top_k}
-            )).fetchall()
-        except Exception as exc:  # noqa: BLE001
-            # zhparser 未装 → fallback to simple
-            logger.warning(
-                "retrieval.chinese_dict_failed_fallback",
-                error=str(exc),
+        rows = (
+            await self.db.execute(
+                select(ResumeVector.resume_id, ResumeVector.keywords)
             )
-            sql2 = text(
-                """
-                SELECT resume_id,
-                       ts_rank_cd(search_tsv, query) AS score
-                FROM resume_vectors, plainto_tsquery('simple', :query) AS query
-                WHERE search_tsv @@ query
-                ORDER BY score DESC
-                LIMIT :top_k
-                """
-            )
-            rows = (await self.db.execute(
-                sql2, {"query": query, "top_k": top_k}
-            )).fetchall()
-        return [ResumeScore(resume_id=int(r[0]), score=float(r[1])) for r in rows]
+        ).fetchall()
+
+        scored: list[ResumeScore] = []
+        for rid, keywords in rows:
+            kw_tokens = _tokenize(" ".join(keywords or []))
+            s = _jaccard(q_tokens, kw_tokens)
+            if s > 0:
+                scored.append(ResumeScore(resume_id=int(rid), score=s))
+
+        scored.sort(key=lambda x: x.score, reverse=True)
+        return scored[:top_k]
 
     # ---------- 混合召回 ----------
     async def hybrid_search(
