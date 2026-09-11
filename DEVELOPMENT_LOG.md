@@ -107,3 +107,70 @@
   因此 GapReport 等 Pydantic schema 必须给 `default_factory=list/dict`；
   `match_score` 为必填字段，mock 必须返回 `0` 或等价默认值，否则校验失败。
 - **Embedding 实现**：mock provider 使用 `FakeEmbeddings`，维度固定 1024。
+
+---
+
+## 2026-09-11（续）岗位数据抓取能力
+
+### 背景
+
+用户指出项目应具备从 Boss 直聘 / 牛客抓取岗位并写入 SQLite 的能力。
+核查后发现：`backend/app/crawler/` 已有单 URL 抓取（`NowcoderCrawler` / `BossCrawler`），
+但**没有批量抓取入口**；`scripts/` 目录原本只有一个 postgres 初始化脚本（已随清理删除）。
+
+### 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `scripts/crawl_jobs.py` | 批量抓取 CLI：列表 → 详情 → 落库；支持 `--limit/--source/--dry-run/--structure` 等 |
+| `scripts/dedupe_jds.py` | 合并 URL 规范化后重复的 `jds` 行（默认只预览，`--apply` 才执行） |
+| `backend/app/crawler/nowcoder_api.py` | 牛客职位广场官方接口客户端 |
+| `backend/app/crawler/batch.py` | 批量详情抓取，复用同一浏览器实例 |
+| `backend/app/crawler/text_utils.py` | 正文清洗：按职位名锚点裁掉页面导航噪声 |
+
+### 修改文件
+
+- `backend/app/crawler/strategies/nowcoder.py`
+  - **公司名提取修正**：牛客正文形如「北京小桔科技有限公司·校招经理」，
+    原代码只匹配「·招聘」导致全部落空。改为四级兜底：
+    正文「反馈率」上一行 → 角色后缀正则 → DOM 区块首词 → 页面 title。
+  - 详情正文调用 `trim_leading_noise` 去掉前置导航（原来每条约有 250 字噪声）。
+  - 列表链接去掉 query/fragment，避免同一职位重复入库。
+- `backend/app/crawler/strategies/boss.py`
+  - 新增 `list_job_urls`（列表页提取 `/job_detail/` 链接）与 `_extract_metadata`。
+  - 新增风控探测：页面出现「异常行为 / 安全验证 / 请先登录」时抛 `CRAWLER_BLOCKED` 并给出可读原因。
+
+### 站点可用性实测（关键结论）
+
+| 站点 | 结果 |
+|---|---|
+| **牛客** | **可用**。列表页 DOM 固定只有 25 条，`?page=N` 与滚动加载均无效；抓包发现官方接口 `POST https://www.nowcoder.com/np-api/u/job/square-search`，`pageSize` 可到 100，共 200 条（2 页）。**1 次请求即可拿到 100 条。** |
+| **Boss 直聘** | **不可用**。首页可访问（HTTP 200 / 537KB），但搜索接口返回 `{"code":35,"message":"您的IP地址存在异常行为."}` —— 站点侧 IP 风控，非本地技术问题。需家庭宽带或复用已登录会话（`--user-data-dir`）。 |
+
+### 接口字段解析要点
+
+- 列表返回混有**两种形态**，字段名完全不同，必须分别解析：
+  - 形态 A「平台职位」（79/101）：`jobName` / `jobCity` / `salaryMin|Max|Month` / `eduLevel` /
+    `graduationYear` / `recommendInternCompany.companyName` / `ext`（JSON 字符串，含 `requirements` + `infos`）
+  - 形态 B「企业官网闪投」（22/101）：`jobTitle` / `description`（HTML）/ `salary`（文本）/
+    `companyName` / `education`（中文）/ `city`
+- `eduLevel` 数字码映射（**经详情页反查核实**，未核实的一律留空不猜）：
+  `0 → 不限`、`5000 → 本科`、`6000 → 硕士`
+- **薪资哨兵值**：`salaryMin=0` / `salaryMax=9999999` 表示「薪资面议」，必须过滤，
+  否则入库会得到「0-9999999K」假数据。已修复，并改为接口模式下**覆盖式写入**以清掉旧值。
+
+### 测试结果
+
+- 小规模验证：3 条、5 条均成功，字段随排查逐步修正。
+- **正式测试抓取：100 条全部成功**（新增 92 + 更新 8；形态 A 79 + 形态 B 22）。
+- 数据质量（表内共 116 行）：`position` 109、`company` 102、`city` 96、`education` 95、
+  `salary` 69（其余为「面议」，属正常）、正文 ≥200 字 115、**缺陷薪资残留 0**。
+- **遗留重复**：`dedupe_jds.py` 预览发现 4 组重复共 6 行、8 条 URL 待规范化。
+  **未执行删除，等用户确认。**
+
+### 数据位置与可回溯性
+
+`backend/data/jd_platform.db` → `jds` 表。
+接口抓取的行会把原始码放入 `structured.crawl_meta`
+（含 `shape` / `edu_level` / `salary_month` / `company_id` / `salary_raw` 等）便于回溯。
+注意：若之后开启 `--structure`，LLM 结构化结果会覆盖该字段。

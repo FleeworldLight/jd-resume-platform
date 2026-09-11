@@ -114,3 +114,50 @@ backend/data/resumes/
 - 当前版本已去掉 Docker / Redis / Celery / PostgreSQL 依赖
 - 爬虫保留并默认启用，适合本地抓取 JD
 - API 仍兼容统一 `Result` 响应格式，前后端交互保持一致
+
+## 10. 岗位数据抓取（可选）
+
+内置牛客 / Boss 直聘的 JD 抓取能力，数据写入 `backend/data/jd_platform.db` 的 `jds` 表。
+
+### 10.1 批量抓取
+
+```bat
+REM 牛客 + Boss，共 100 条
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --limit 100
+
+REM 只抓牛客，走官方接口（推荐：1 次请求即可拿 100 条）
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder --limit 100
+
+REM 只抓 Boss
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss --query Python --city 100010000 --limit 50
+
+REM 只取列表、不入库
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder --limit 20 --dry-run
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--limit N` | 目标总条数（默认 100）；超过 300 需加 `--yes` |
+| `--source nowcoder \| boss \| all` | 抓取来源 |
+| `--nowcoder-mode api \| dom` | 牛客抓取方式；`api`（默认）走官方接口，`dom` 逐页渲染 |
+| `--delay` | 请求间隔秒数（默认 1.5），**请勿设为 0** |
+| `--structure` | 抓完后额外跑一次 LLM 结构化（默认关闭） |
+| `--user-data-dir` | 持久化浏览器目录，可复用已登录会话（Boss 需要） |
+
+### 10.2 清理重复行
+
+```bat
+REM 预览（默认不改数据）
+backend\.venv\Scripts\python.exe scripts\dedupe_jds.py
+
+REM 确认后执行
+backend\.venv\Scripts\python.exe scripts\dedupe_jds.py --apply
+```
+
+### 10.3 已知限制
+
+- **牛客**：可用，走官方接口，速度快。
+- **Boss 直聘**：其搜索/列表接口对数据中心与代理 IP 有风控，会返回
+  `{"code":35,"message":"您的IP地址存在异常行为."}`。家庭宽带下或复用已登录会话
+  （`--user-data-dir`）可能可用，需自行验证。脚本会如实报错，不会伪造数据。
+- 请遵守目标站点的 robots 与服务条款，仅用于个人求职分析，保持低频访问。

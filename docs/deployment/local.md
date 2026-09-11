@@ -149,6 +149,15 @@ npm run build
 REM 前端类型检查
 cd frontend
 npx tsc --noEmit
+
+REM 批量抓取岗位 JD（范围：牛客 + Boss，共 100 条）
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --limit 100
+
+REM 只抓牛客（走官方接口，最快）
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder --limit 100
+
+REM 预览重复行，确认后加 --apply
+backend\.venv\Scripts\python.exe scripts\dedupe_jds.py
 ```
 
 ---
