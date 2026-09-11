@@ -171,10 +171,39 @@ REM 全量联网比对（约 4-5 分钟）
 backend\.venv\Scripts\python.exe scripts\verify_jds.py --all-live
 ```
 
-### 10.4 已知限制
+### 10.4 Boss 直聘说明（重要）
+
+**当前环境下 Boss 无法抓取**，排查结论如下：
+
+- 其搜索接口对无会话访问统一返回 `{"code":35,"message":"您的IP地址存在异常行为."}`。
+  实测更换 `Accept` / `Referer` / `Origin` / `X-Requested-With` 等请求头**均无效**，
+  判定发生在 IP / 会话层，不是请求头能解决的。
+- Boss 的 `robots.txt` 明确 `Disallow: /*?query=*`、`*?city=*`、`*?experience=*` 等，
+  **不欢迎对搜索结果做抓取**，并专门封禁了 `Jobuispider` 这类职位爬虫 UA。
+- 官方开放平台（`hi-open.zhipin.com`）面向**企业招聘方**，需创建应用、申请权限、
+  申请 IP 白名单，**没有面向求职者的职位搜索接口**。
+
+唯一有技术希望的路子是**复用你自己账号的登录态**：
+
+```bat
+REM 1) 检查依赖与配置（不开浏览器）
+backend\.venv\Scripts\python.exe scripts\boss_login.py --check
+
+REM 2) 打开浏览器手动登录，脚本自动检测能否看到职位并保存会话
+backend\.venv\Scripts\python.exe scripts\boss_login.py
+
+REM 3) 小批量验证（先别全量）
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss ^
+  --storage-state backend\data\boss_state.json --limit 10 --dry-run
+```
+
+> **请自行评估风险**：用账号低频抓取仍与 Boss 的 robots 条款存在张力，
+> 最坏情况是账号被风控。建议只抓自己求职真正需要的岗位。
+>
+> 项目**不做任何绕过**：不轮换 IP、不破解 `__zp_stoken__` 签名、不伪造浏览器指纹。
+
+### 10.5 已知限制
 
 - **牛客**：可用，走官方接口，速度快。
-- **Boss 直聘**：其搜索/列表接口对数据中心与代理 IP 有风控，会返回
-  `{"code":35,"message":"您的IP地址存在异常行为."}`。家庭宽带下或复用已登录会话
-  （`--user-data-dir`）可能可用，需自行验证。脚本会如实报错，不会伪造数据。
+- **Boss 直聘**：见 10.4，需自备登录态且存在条款风险。
 - 请遵守目标站点的 robots 与服务条款，仅用于个人求职分析，保持低频访问。

@@ -126,7 +126,9 @@ async def collect_urls(args: argparse.Namespace, source: str, want: int) -> list
                 got = await NowcoderCrawler().list_job_urls(listing, limit=30)
             else:
                 got = await BossCrawler().list_job_urls(
-                    build_boss_search_url(args.query, args.city, page), limit=30
+                    build_boss_search_url(args.query, args.city, page),
+                    limit=30,
+                    storage_state=args.storage_state,
                 )
         except Exception as exc:  # noqa: BLE001
             print(f"[{source}] 第 {page} 页失败: {exc}")
@@ -251,6 +253,8 @@ async def main() -> int:
     parser.add_argument("--headless", dest="headless", action="store_true", default=True)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--user-data-dir", default=None, help="持久化浏览器目录（可复用登录态）")
+    parser.add_argument("--storage-state", default=None,
+                        help="已登录会话文件（scripts/boss_login.py 生成），Boss 必需")
     parser.add_argument("--structure", action="store_true", help="抓完后额外跑 LLM 结构化")
     parser.add_argument("--dry-run", action="store_true", help="只取列表，不入库")
     parser.add_argument("--yes", action="store_true", help=f"确认超过 {SAFE_LIMIT} 条的大批量抓取")
@@ -320,6 +324,7 @@ async def main() -> int:
                 delay=args.delay,
                 headless=args.headless,
                 user_data_dir=args.user_data_dir,
+                storage_state=args.storage_state,
                 timeout_sec=args.timeout,
                 on_progress=progress,
             )

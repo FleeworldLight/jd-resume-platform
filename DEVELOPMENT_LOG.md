@@ -243,3 +243,84 @@ backend\.venv\Scripts\python.exe scripts\verify_jds.py --all-live  REM 全量联
 
 全量联网比对约需 4–5 分钟（116 条 × 0.8s 间隔），报告会区分「接口抓取行 / 遗留行」。
 建议在**每次全量抓取之后**都跑一次 `--live`，作为入库数据的质量门禁。
+
+---
+
+## 2026-09-11（续三）Boss 直聘可行性排查
+
+用户要求继续尝试抓取 Boss 直聘。做了三条线的排查，结论如下。
+
+### 结论一：换请求头无效，封锁在 IP / 会话层
+
+搜索接口 `GET /wapi/zpgeek/search/joblist.json` 依次尝试了四组请求头：
+
+| 请求头组合 | 返回 |
+|---|---|
+| 仅 User-Agent | `{"code":35,"message":"您的IP地址存在异常行为."}` |
+| UA + `Accept: application/json` | 同上 |
+| UA + `Accept` + `Referer` | 同上 |
+| UA + `Accept` + `Referer` + `Origin` + `X-Requested-With` | 同上 |
+
+四组完全一致 → 判定发生在 IP / 会话层。页面自身 JS 会生成 `__zp_stoken__` 之类凭证，
+只有真实浏览器会话才带得出来。
+
+### 结论二：robots.txt 明确禁止抓取搜索结果
+
+```
+User-agent: *
+Disallow: /*?query=*        ← 正是搜索 URL 的形态
+Disallow: *?city=*  *?experience=*  *?salary=*  *?degree=*
+Disallow: /web/geek/recommend*   Disallow: /web/boss/*
+
+User-agent: Jobuispider
+Disallow: /                  ← 专门封禁"职位爬虫"类 UA
+```
+
+站点不仅禁止，还专门拉黑了一个叫 `Jobuispider` 的职位爬虫。
+
+### 结论三：官方开放平台不适用于求职者
+
+`hi-open.zhipin.com`（Bosshi 开放平台）面向**企业招聘方 / 合作伙伴**：
+需要创建应用 → 申请权限 → 获取 access_token →（可选）设置 IP 白名单，
+能力集中在「向企业内员工发消息」「职位同步发布」等 HR 集成场景，
+**没有面向求职者的职位搜索接口**。
+
+### 唯一可行的技术路径：复用用户自己的登录态
+
+新增 `scripts/boss_login.py`：
+
+1. 打开一个**可见**浏览器窗口，用户手动扫码/账号登录；
+2. 脚本轮询检测搜索页能否渲染出职位卡片（多个选择器兜底），
+   同时充当「账号 + 网络出口是否可用」的能力验证；
+3. 检测通过后把会话保存为 `backend/data/boss_state.json`（已被 .gitignore 忽略），
+   并打印下一步命令；
+4. 失败时输出诊断（是否出现「安全验证」、页面是否为空、是否仍报 IP 异常）。
+
+配套打通了登录态链路：
+
+- `BossCrawler.list_job_urls(..., storage_state=...)`
+- `batch.fetch_details(..., storage_state=...)`
+- `crawl_jobs.py --storage-state <path>`
+
+**明确不做的事**（已在代码注释与文档中写明）：不轮换 IP、不破解 `__zp_stoken__`
+签名、不伪造浏览器指纹。登录态方案本身也与 robots 条款存在张力，
+风险交由用户自行评估，最坏情况是账号被风控。
+
+### 顺带修掉两个数据质量漏洞（实测踩坑）
+
+排查过程中实测发现，Boss 搜索页模板里存在一个**不带职位 ID 的空链接**
+`https://www.zhipin.com/job_detail/`，它会把**登录页**当成职位抓回来并入库
+（实测产生了一条 `source=BOSS`、`position=NULL`、正文为「验证码登录/注册…」的脏数据）。
+
+两处修补：
+
+1. `BossCrawler.list_job_urls` 增加 URL 形态校验：
+   必须是 `/job_detail/<职位ID>.html`（ID ≥ 6 位字母数字），其余链接计入
+   `skipped` 并记 warning 日志。
+2. `batch.fetch_details`：
+   - `BLOCK_HINTS` 补充 `验证码登录` / `扫码登录` / `登录/注册`，识别登录页；
+   - 新增兜底：若既未提取到 `position` 也未提取到 `company`，判定为
+     登录页 / 模板页 / 空壳页，标记失败、不入库。
+
+已删除那条测试脏数据（jds 表回到 116 行，BOSS 来源 0 行）。
+`pytest` 55 项仍全部通过。

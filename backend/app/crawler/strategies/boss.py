@@ -44,8 +44,16 @@ class BossCrawler:
         self.metadata: dict[str, str | int | None] = {}
 
     # ---------- 列表页：提取职位详情链接 ----------
-    async def list_job_urls(self, url: str, limit: int = 10) -> list[str]:
-        """从 Boss 搜索页提取职位详情链接。"""
+    async def list_job_urls(
+        self, url: str, limit: int = 10, storage_state: str | None = None
+    ) -> list[str]:
+        """从 Boss 搜索页提取职位详情链接。
+
+        Args:
+            storage_state: 已登录会话文件（由 `scripts/boss_login.py` 生成）。
+                Boss 对未登录访问统一返回 code 35「IP 地址存在异常行为」，
+                必须带上真实登录会话才可能拿到数据。
+        """
         ua = random.choice(_load_ua_pool())
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -56,11 +64,14 @@ class BossCrawler:
                 ],
             )
             try:
-                ctx = await browser.new_context(
-                    user_agent=ua,
-                    viewport={"width": 1920, "height": 1080},
-                    locale="zh-CN",
-                )
+                ctx_kwargs: dict = {
+                    "user_agent": ua,
+                    "viewport": {"width": 1920, "height": 1080},
+                    "locale": "zh-CN",
+                }
+                if storage_state:
+                    ctx_kwargs["storage_state"] = storage_state
+                ctx = await browser.new_context(**ctx_kwargs)
                 page = await ctx.new_page()
                 await page.goto(
                     url,
@@ -73,23 +84,37 @@ class BossCrawler:
                 if len(body.strip()) < 50 or any(h in body for h in _BLOCK_HINTS):
                     raise BusinessException(
                         ErrorCode.CRAWLER_BLOCKED,
-                        "Boss 列表页被风控拦截（IP 异常或未登录）",
+                        "Boss 列表页被风控拦截（IP 异常或未登录）。"
+                        "可先运行 scripts/boss_login.py 准备登录态，再用 --storage-state 复用。",
                     )
 
                 hrefs = await page.locator("a").evaluate_all(
                     "els => els.map(a => a.href)"
                     ".filter(h => h && h.indexOf('/job_detail/') !== -1)"
                 )
+                # 必须是 /job_detail/<职位ID>.html。
+                # 搜索页模板里还存在一个不带 ID 的空链接 /job_detail/，
+                # 它会把登录页当成职位抓回来（已实测踩坑），必须排除。
+                detail_re = re.compile(r"/job_detail/[0-9A-Za-z_~\-]{6,}\.html")
+                skipped = 0
                 results: list[str] = []
                 for href in hrefs:
                     absolute = urljoin(url, href).split("?", 1)[0]
+                    if not detail_re.search(absolute):
+                        skipped += 1
+                        continue
                     if absolute not in results:
                         results.append(absolute)
                     if len(results) >= max(1, min(limit, 60)):
                         break
+                if skipped:
+                    logger.warning("crawler.boss.skipped_invalid_links", count=skipped)
                 if not results:
                     raise BusinessException(
-                        ErrorCode.JD_CRAWL_FAILED, "Boss 搜索页未发现职位详情链接"
+                        ErrorCode.JD_CRAWL_FAILED,
+                        f"Boss 搜索页未发现职位详情链接（页面正文 {len(body.strip())} 字）。"
+                        "通常说明未登录或该网络出口被风控 —— 请先运行 "
+                        "scripts/boss_login.py 准备登录态，再用 --storage-state 复用。",
                     )
                 return results
             finally:

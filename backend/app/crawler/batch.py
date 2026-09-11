@@ -36,8 +36,11 @@ _DETAIL_SELECTORS: dict[str, tuple[str, ...]] = {
     "NOWCODER": (),
 }
 
-# 页面里出现这些字样，说明被风控或未登录
-BLOCK_HINTS = ("异常行为", "安全验证", "请先登录", "登录后查看")
+# 页面里出现这些字样，说明被风控或落到了登录页
+BLOCK_HINTS = (
+    "异常行为", "安全验证", "请先登录", "登录后查看",
+    "验证码登录", "扫码登录", "登录/注册",
+)
 
 MIN_TEXT_LEN = 50
 
@@ -63,6 +66,7 @@ async def fetch_details(
     delay: float = 1.5,
     headless: bool = True,
     user_data_dir: str | None = None,
+    storage_state: str | None = None,
     timeout_sec: int | None = None,
     on_progress: Callable[[int, int, FetchResult], None] | None = None,
 ) -> list[FetchResult]:
@@ -98,11 +102,14 @@ async def fetch_details(
                 headless=headless,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             )
-            ctx = await browser.new_context(
-                user_agent=random.choice(ua_pool),
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-            )
+            ctx_kwargs: dict = {
+                "user_agent": random.choice(ua_pool),
+                "viewport": {"width": 1920, "height": 1080},
+                "locale": "zh-CN",
+            }
+            if storage_state:
+                ctx_kwargs["storage_state"] = storage_state
+            ctx = await browser.new_context(**ctx_kwargs)
 
         try:
             for idx, url in enumerate(urls, start=1):
@@ -141,6 +148,13 @@ async def fetch_details(
                         )
                         if len(result.raw_text.strip()) < MIN_TEXT_LEN:
                             result.error = "清洗后内容过短"
+                        elif not (
+                            result.metadata.get("position")
+                            or result.metadata.get("company")
+                        ):
+                            # 兜底：既没职位名也没公司名，基本是登录页 / 模板页 / 空壳页。
+                            # 曾把 Boss 的登录页当成职位入库，这里必须拦掉。
+                            result.error = "未提取到职位名与公司名（疑似登录页或模板页）"
                 except Exception as exc:  # noqa: BLE001
                     result.error = f"{type(exc).__name__}: {str(exc)[:200]}"
                     logger.warning("batch.fetch_failed", url=url, error=result.error)
