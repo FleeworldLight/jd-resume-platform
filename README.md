@@ -154,7 +154,24 @@ REM 确认后执行
 backend\.venv\Scripts\python.exe scripts\dedupe_jds.py --apply
 ```
 
-### 10.3 已知限制
+### 10.3 校验数据真实性
+
+抓完后建议跑一次校验：它会**独立打开每个职位的真实详情页**，
+从页面内嵌数据里取出站点自己渲染的字段，与库中记录逐字段比对
+（职位名、公司 ID、薪资、城市、学历、正文），确认没有脏数据。
+
+```bat
+REM 静态校验（全量、不联网）
+backend\.venv\Scripts\python.exe scripts\verify_jds.py
+
+REM 抽样 15 条联网比对真实页面
+backend\.venv\Scripts\python.exe scripts\verify_jds.py --live 15
+
+REM 全量联网比对（约 4-5 分钟）
+backend\.venv\Scripts\python.exe scripts\verify_jds.py --all-live
+```
+
+### 10.4 已知限制
 
 - **牛客**：可用，走官方接口，速度快。
 - **Boss 直聘**：其搜索/列表接口对数据中心与代理 IP 有风控，会返回

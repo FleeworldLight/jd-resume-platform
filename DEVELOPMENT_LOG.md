@@ -174,3 +174,72 @@
 接口抓取的行会把原始码放入 `structured.crawl_meta`
 （含 `shape` / `edu_level` / `salary_month` / `company_id` / `salary_raw` 等）便于回溯。
 注意：若之后开启 `--structure`，LLM 结构化结果会覆盖该字段。
+
+---
+
+## 2026-09-11（续二）数据真实性校验
+
+### 动机
+
+用户要求确认抓到的职位信息是否真实。
+
+### 方法：用独立通道比对
+
+只证明「数据来自接口」是不够的——接口也可能返回缓存或脏数据。
+因此新增 `scripts/verify_jds.py`，用**另一条独立通道**复核：
+
+直接打开每个职位的详情页 `https://www.nowcoder.com/jobs/detail/<id>`
+（实测可被 httpx 直接取到，HTTP 200 / 约 44KB HTML），
+再从页面内嵌的 `window.__INITIAL_STATE__.store.jobDetail.detail`
+取出**站点自己渲染的字段**，与库中存储逐字段比对。
+
+比对项：
+
+| 页面字段 | 库中字段 |
+|---|---|
+| `jobName` | `position` |
+| `companyId` | `structured.crawl_meta.company_id` |
+| `salaryMin` / `salaryMax` | `salary_min` / `salary_max`（含哨兵值归一化） |
+| `salaryMonth` | `structured.crawl_meta.salary_month` |
+| `jobCity` | `city` |
+| `eduLevel` | `structured.crawl_meta.edu_level` |
+| `ext.infos` / `ext.requirements` 正文片段 | `raw_text` |
+
+### 校验结果（全量 116 行，逐条打开真实页面）
+
+| 集合 | 一致率 |
+|---|---|
+| **接口抓取行** | **101/101 = 100%** |
+| 遗留行（旧 DOM 抓取） | 8/15 |
+| 合计 | 109/116 |
+
+7 条不一致**全部**是 id #1–#7 的遗留行：当时 DOM 抓取只存了正文、没提取出字段，
+所以 `position` / `salary` 为空。而页面显示这些职位本身真实存在：
+
+| id | URL | 页面真实职位 | 页面薪资 |
+|---|---|---|---|
+| 1 | `.../465046` | 内容运营（成都）-2027校招 | 7-12K |
+| 2 | `.../465118` | 人工智能 | 16-25K |
+| 3 | `.../465117` | 软件开发工程师（2027届） | 15-30K |
+| 4 | `.../465096` | AI应用开发工程师 | 20-40K |
+| 5 / 6 / 7 | `.../461392`（同一职位重复 3 行） | （27届秋招）SRE（运维）工程师-北京 | 20-35K |
+
+**结论：本次抓取的 101 条数据 100% 与站点真实页面一致，不存在伪造或幻觉数据。**
+不一致项全部来自清理前遗留的历史行，且性质是「字段缺失」而非「数据错误」。
+
+### 静态校验（全量、不联网）
+
+- URL 不合法 **0**；薪资不合理 **0**；正文不含职位名 **0**
+- URL 重复 6 行（陈旧重复，`dedupe_jds.py` 可清理）
+- `position` 为空 7 行、`company` 为空 14 行 —— 均为遗留行
+
+### 用法
+
+```bat
+backend\.venv\Scripts\python.exe scripts\verify_jds.py             REM 静态校验
+backend\.venv\Scripts\python.exe scripts\verify_jds.py --live 15   REM 抽样联网比对
+backend\.venv\Scripts\python.exe scripts\verify_jds.py --all-live  REM 全量联网比对
+```
+
+全量联网比对约需 4–5 分钟（116 条 × 0.8s 间隔），报告会区分「接口抓取行 / 遗留行」。
+建议在**每次全量抓取之后**都跑一次 `--live`，作为入库数据的质量门禁。
