@@ -76,6 +76,27 @@
 6. **提交固化**
    - 历史上"极简化改造"未提交，本次先补 2 个快照 commit，再提交本轮清理。
 
+### 验证结果（2026-09-11）
+
+- **后端测试**：`pytest tests/ -v` → **55 passed, 38 warnings in 6.12s**
+  （警告均为 `datetime.utcnow()` 与 pytest-asyncio 的弃用提示，非错误）
+- **后端冒烟**：uvicorn 启动成功，注册 **22 条 API 路由**；`/health`、`/docs`、`/openapi.json` 均返回 200；
+  日志兼容层工作正常，无 TypeError。路由清单：resumes（5）、jds（6）、customizations、llm_providers 等。
+- **前端冒烟**：vite v5.4.21 启动成功；`/` 返回 200 且 HTML 正常；`/src/main.tsx` 返回 200。
+- 测试后端口 8000 / 5173 均已释放。
+
+### 备注：本机环境的一个高危行为（重要）
+
+在本仓库内**删除文件**会触发异常——被删文件所在的**父目录会被整体移入 G 盘回收站**。
+该现象已两次精确复现（`git rm` 删 backend/Dockerfile、frontend/Dockerfile、scripts/init-postgres.sql 等，
+导致 `backend/`、`frontend/`、`scripts/` 三个目录被回收，含 `.venv`、`node_modules`、`jd_platform.db`）。
+
+规避方式：**用 `mv` 把文件移出仓库**（移到 `测试/_jd_removed/`）而不是删除。
+本次所有删除项均以该方式完成，未再触发。原因未完全确定，不要用 `git rm`。
+
+教训：破坏性操作前先 commit；操作后立即校验 `backend/.venv`、`frontend/node_modules`、`backend/data/jd_platform.db` 是否还在——
+这三项不被 git 跟踪，一旦丢失 git 救不回来。
+
 ### 承接自原 NEXT_AI_TODO.md 的技术约定（务必保留）
 
 - **LangChain 仍在使用**：`langchain-openai` / `langchain-anthropic` 保留，未彻底移除。
