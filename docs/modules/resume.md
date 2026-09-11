@@ -1,5 +1,11 @@
 # 简历模块
 
+> **文档状态：部分过时（2026-09-11 标注）**
+>
+> 本文写于项目采用 Docker + PostgreSQL + pgvector + Redis + Celery 架构的阶段。
+> 当前实际架构已简化为 SQLite + mock LLM provider + 无 Celery 的同步执行，详见根目录 README.md。
+> 下文涉及 Docker / Postgres / pgvector / Redis / Celery / weasyprint 的段落仅作历史设计参考，不代表现状。
+
 > 简历上传、解析、检索、删除。
 
 ---

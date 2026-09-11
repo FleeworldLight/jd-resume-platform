@@ -1,6 +1,7 @@
 # 本地部署
 
-> Docker Compose 一键启动全部依赖 + 应用。
+> 本地优先方案：SQLite + mock LLM provider，Windows 双击 `start.bat` 即可运行。
+> 不需要 Docker / PostgreSQL / Redis / Celery，也不需要任何外部服务。
 
 ---
 
@@ -8,480 +9,179 @@
 
 | 依赖 | 版本 | 必需 | 说明 |
 |---|---|---|---|
-| Docker | 20+ | ✅ | 容器运行时 |
-| Docker Compose | 2+ | ✅ | 编排工具 |
-| Python | 3.12+ | ⚠️ | 本地开发时需要 |
-| Poetry | 1.8+ | ⚠️ | 本地开发时需要 |
-| Node.js | 18+ | ⚠️ | 前端开发时需要 |
-| pnpm | 10+ | ⚠️ | 前端推荐 |
+| Windows | 10 / 11 | 是 | 启动脚本为 .bat |
+| Python | 3.12+ | 是 | 后端运行时 |
+| Node.js | 18+ | 是 | 前端运行时 |
+| Playwright Chromium | 随依赖安装 | 否 | 仅在 `CRAWLER_ENABLED=true` 抓取 JD 时需要 |
+
+不再需要 Docker / Docker Compose / PostgreSQL / Redis / Celery。
 
 ---
 
 ## 2. 目录结构
 
-```
+```text
 jd-resume-platform/
-├── backend/                    # Python 后端
-├── frontend/                   # React 前端
-├── docs/                       # 设计文档
-├── docker-compose.yml          # 全部编排
-├── docker-compose.dev.yml      # 仅依赖（开发用）
-├── .env.example                # 环境变量示例
-├── README.md
-└── data/                       # 简历文件（git ignore）
+├── backend/                  # FastAPI 后端
+│   ├── app/                  # 应用代码（api / services / db / crawler / prompts）
+│   ├── tests/                # pytest 测试
+│   ├── alembic/              # 数据库迁移
+│   ├── requirements.txt
+│   ├── .env.example          # 环境变量模板（应用实际读取 backend/.env）
+│   └── data/                 # 本地数据目录（git ignore）
+│       ├── jd_platform.db    # SQLite 数据库
+│       └── resumes/          # 简历原文件
+├── frontend/                 # React + Vite 前端
+├── docs/                     # 设计文档
+├── start.bat                 # Windows 一键启动
+└── README.md
 ```
 
 ---
 
-## 3. 快速启动
+## 3. 一键启动（推荐）
 
-### 3.1 克隆 + 配置
+在项目根目录双击 `start.bat`。脚本会依次：
 
-```bash
-git clone <repo-url>
-cd jd-resume-platform
+1. 释放 8000 / 5173 端口占用
+2. 首次运行时创建 `backend/.venv` 并安装后端依赖
+3. 首次运行时安装 Playwright Chromium
+4. 首次运行时执行 `npm install`
+5. 分别启动后端与前端（两个独立窗口）
 
-# 复制环境变量
-cp .env.example .env
+访问地址：
 
-# 编辑 .env，至少填：
-# - LLM_API_KEY（必需）
-# - LLM_ENCRYPTION_KEY（必需）
-# - POSTGRES_PASSWORD（必需）
-```
+- 前端：`http://localhost:5173`
+- 后端 API 文档：`http://localhost:8000/docs`
+- 本地数据库：`backend/data/jd_platform.db`
+- 默认 LLM provider：`mock`
 
-### 3.2 启动依赖（仅数据库 + Redis）
+---
 
-```bash
-docker compose -f docker-compose.dev.yml up -d
-```
+## 4. 手动启动
 
-启动 PostgreSQL（含 pgvector + zhparser） + Redis。
+### 4.1 后端
 
-### 3.3 本地启动后端
-
-```bash
+```bat
 cd backend
-poetry install
-poetry run alembic upgrade head
-poetry run uvicorn app.main:app --reload --port 8000
-
-# 另开一个终端：Celery worker
-poetry run celery -A app.tasks.celery_app worker -l info
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 3.4 本地启动前端
+### 4.2 前端
 
-```bash
+```bat
 cd frontend
-pnpm install
-pnpm dev
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-访问 `http://localhost:5173`。
-
-### 3.5 一键启动全部（Docker Compose）
-
-```bash
-docker compose up -d --build
-```
-
-启动：
-- PostgreSQL + Redis + 后端 + Celery worker + 前端
-
-访问：
-- 前端：`http://localhost`
-- 后端 API：`http://localhost:8000`
-- API 文档：`http://localhost:8000/docs`
+前端 `vite.config.ts` 已把 `/api` 代理到 `http://localhost:8000`。
 
 ---
 
-## 4. docker-compose.yml
+## 5. 环境变量
 
-### 4.1 开发版（仅依赖）
+配置模板为 `backend/.env.example`。**必须先进入 `backend/` 目录再复制**：
 
-```yaml
-# docker-compose.dev.yml
-services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: jd-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: jd_platform
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-  
-  redis:
-    image: redis:7-alpine
-    container_name: jd-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-volumes:
-  pgdata:
+```bat
+cd backend
+copy .env.example .env
 ```
 
-### 4.2 完整版
+原因：`app/core/config.py` 中的 `env_file=".env"` 是相对路径，相对**进程工作目录**解析；以本文档方式启动时工作目录即 `backend/`。放在仓库根目录的 `.env` 不会被读取。
 
-```yaml
-# docker-compose.yml
-services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: jd-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: jd_platform
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-  
-  redis:
-    image: redis:7-alpine
-    container_name: jd-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-  
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: jd-backend
-    restart: unless-stopped
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - resume_files:/app/data/resumes
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/jd_platform
-      REDIS_URL: redis://redis:6379/0
-      RESUME_STORAGE_DIR: /app/data/resumes
-  
-  celery-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: jd-celery-worker
-    restart: unless-stopped
-    command: celery -A app.tasks.celery_app worker -l info
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - resume_files:/app/data/resumes
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/jd_platform
-      REDIS_URL: redis://redis:6379/0
-      RESUME_STORAGE_DIR: /app/data/resumes
-  
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: jd-frontend
-    restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-80}:80"
-    depends_on:
-      - backend
+关键变量：
 
-volumes:
-  pgdata:
-  resume_files:
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/jd_platform.db` | 相对 `backend/` 解析 |
+| `DATABASE_SYNC_URL` | `sqlite:///./data/jd_platform.db` | Alembic 等同步场景使用 |
+| `LLM_DEFAULT_PROVIDER` | `mock` | 可选 `openai` / `anthropic` |
+| `EMBEDDING_DIM` | `1024` | 向量维度 |
+| `CRAWLER_ENABLED` | `true` | 关闭后禁用手动 URL 抓取 |
+| `RESUME_STORAGE_DIR` | `./data/resumes` | 相对 `backend/` 解析 |
+| `CORS_ORIGINS` | `["http://localhost:5173","http://localhost:3000"]` | 前端跨域白名单 |
+
+---
+
+## 6. 数据位置
+
+| 内容 | 路径 |
+|---|---|
+| SQLite 数据库 | `backend/data/jd_platform.db` |
+| 简历原文件 | `backend/data/resumes/` |
+
+`backend/data/` 已被 `.gitignore` 忽略，不会进入版本管理。
+
+---
+
+## 7. 数据库迁移
+
+```bat
+cd backend
+.venv\Scripts\alembic.exe upgrade head
+```
+
+当前迁移脚本只有一个：`alembic/versions/0001_init.py`（已改写为 SQLite 兼容）。
+
+---
+
+## 8. LLM 模式
+
+- `mock`（默认）：离线可用，`structured_invoke` 返回带默认值的固定结构，`FakeEmbeddings` 提供 1024 维向量。
+- `openai` / `anthropic`：需在 `backend/.env` 填入对应 API Key，真实接入仍走 LangChain。
+
+---
+
+## 9. 常用命令
+
+```bat
+REM 后端测试
+cd backend
+.venv\Scripts\python.exe -m pytest tests/ -v
+
+REM 前端构建
+cd frontend
+npm run build
+
+REM 前端类型检查
+cd frontend
+npx tsc --noEmit
 ```
 
 ---
 
-## 5. .env.example
+## 10. 常见问题
 
-```env
-# ===================
-# 数据库
-# ===================
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=jd_platform
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=password
+### Q1: 后端启动报 `winerror 10048`
 
-# ===================
-# Redis
-# ===================
-REDIS_HOST=localhost
-REDIS_PORT=6379
+端口 8000 被占用。`start.bat` 会自动释放；手动启动时可先关闭占用进程，或改用其他端口。
 
-# ===================
-# 后端
-# ===================
-BACKEND_PORT=8000
-RESUME_STORAGE_DIR=./data/resumes
-APP_ENV=development
+### Q2: 修改了 `.env` 却不生效
 
-# ===================
-# LLM
-# ===================
-# 至少填一个 LLM_API_KEY
-LLM_API_KEY=your-dashscope-api-key
-LLM_MODEL=qwen3.5-flash
-LLM_EMBEDDING_MODEL=text-embedding-v3
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+确认文件位置是 `backend/.env` 而不是仓库根目录的 `.env`。根目录的那份不会被读取。
 
-# API Key 加密密钥（Fernet）
-# 生成：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-LLM_ENCRYPTION_KEY=your-generated-fernet-key=
+### Q3: 抓取 JD URL 失败
 
-# ===================
-# 爬虫
-# ===================
-JD_CRAWLER_ENABLED=true
-JD_CRAWLER_TIMEOUT=60
-JD_CRAWLER_USER_AGENT_POOL=app/crawler/user_agents.yml
+需要 Playwright Chromium。执行：
 
-# ===================
-# 召回
-# ===================
-RETRIEVAL_VECTOR_WEIGHT=0.6
-RETRIEVAL_KEYWORD_WEIGHT=0.4
-RETRIEVAL_CANDIDATE_TOP_K=100
-RETRIEVAL_FINAL_TOP_K=50
-
-# ===================
-# 定制化
-# ===================
-CUSTOMIZATION_PREDICT_QUESTION_COUNT=5
-CUSTOMIZATION_RETRY_MAX=2
+```bat
+cd backend
+.venv\Scripts\python.exe -m playwright install chromium
 ```
 
----
+或设置 `CRAWLER_ENABLED=false` 关闭抓取功能。
 
-## 6. 后端 Dockerfile
+### Q4: 还需要装 pgvector / zhparser / weasyprint 吗
 
-```dockerfile
-# backend/Dockerfile
-FROM python:3.12-slim
+不需要。这三项已随 Docker + PostgreSQL 方案一并移除：
 
-WORKDIR /app
+- 向量检索 → 改为纯 Python 计算 cosine + Jaccard
+- 中文全文检索 → 已移除
+- PDF 导出 → 改用 reportlab，无系统字体依赖
 
-# 系统依赖（Playwright + weasyprint）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev libpango-1.0-0 libpangoft2-1.0-0 \
-    curl wget \
-    && rm -rf /var/lib/apt/lists/*
+### Q5: 定制化接口很慢
 
-# Poetry
-ENV POETRY_HOME=/opt/poetry
-RUN curl -sSL https://install.python-poetry.org | python3 -
-ENV PATH="${PATH}:${POETRY_HOME}/bin"
-
-# 依赖
-COPY pyproject.toml poetry.lock ./
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-dev --no-interaction
-
-# Playwright 浏览器
-RUN playwright install chromium
-RUN playwright install-deps chromium
-
-# 代码
-COPY . .
-
-# 数据目录
-RUN mkdir -p /app/data/resumes
-
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
----
-
-## 7. 前端 Dockerfile
-
-```dockerfile
-# frontend/Dockerfile
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm build
-
-# Nginx 镜像
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
-```
-
-```nginx
-# frontend/nginx.conf
-server {
-    listen 80;
-    server_name _;
-    
-    root /usr/share/nginx/html;
-    index index.html;
-    
-    location /api/ {
-        proxy_pass http://backend:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
----
-
-## 8. 数据库初始化
-
-**`scripts/init-postgres.sql`**
-
-```sql
--- 启用 pgvector
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- 启用 zhparser（中文分词）
-CREATE EXTENSION IF NOT EXISTS zhparser;
-
--- 中文全文检索配置
-CREATE TEXT SEARCH CONFIGURATION chinese (PARSER = zhparser);
-ALTER TEXT SEARCH CONFIGURATION chinese
-    ADD MAPPING FOR n, v, a, i, e, l, t WITH simple;
-```
-
-**Alembic 迁移**
-
-```bash
-# 生成迁移
-alembic revision --autogenerate -m "init schema"
-
-# 应用迁移
-alembic upgrade head
-
-# 回滚
-alembic downgrade -1
-```
-
----
-
-## 9. 常用运维命令
-
-```bash
-# 查看日志
-docker compose logs -f backend
-docker compose logs -f celery-worker
-
-# 进入容器
-docker compose exec backend bash
-docker compose exec postgres psql -U postgres -d jd_platform
-
-# 重建服务
-docker compose up -d --build backend
-
-# 停止
-docker compose down
-
-# 清理数据（慎用）
-docker compose down -v
-```
-
----
-
-## 10. 健康检查
-
-```bash
-# 后端
-curl http://localhost:8000/health
-
-# 数据库
-docker compose exec postgres pg_isready
-
-# Redis
-docker compose exec redis redis-cli ping
-```
-
----
-
-## 11. 常见问题
-
-### Q1: 启动时 zhparser 扩展安装失败？
-
-**原因**：基础镜像没有 zhparser。
-
-**解决**：使用 `pgvector/pgvector:pg16` 基础镜像，然后手动安装：
-```bash
-docker compose exec postgres apt-get update
-docker compose exec postgres apt-get install -y postgresql-16-zhparser
-docker compose exec postgres psql -U postgres -c "CREATE EXTENSION zhparser;"
-```
-
-### Q2: Playwright 浏览器启动失败？
-
-**原因**：缺少系统依赖。
-
-**解决**：确保 Dockerfile 里安装了 `playwright install-deps`。
-
-### Q3: weasyprint 中文显示乱码？
-
-**解决**：安装中文字体：
-```dockerfile
-RUN apt-get install -y fonts-noto-cjk
-```
-
-### Q4: Alembic 找不到模型？
-
-**检查** `alembic/env.py`：
-```python
-from app.db.base import Base
-from app.db.models import *  # 显式导入
-target_metadata = Base.metadata
-```
+`POST /api/customizations` 已改为同步执行，本地约需数十秒。前端需使用长 loading 态并放宽超时。

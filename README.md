@@ -5,18 +5,18 @@
 ## 1. 目标
 
 - Windows 本地双击打开即可运行
-- 默认使用 SQLite，本地数据文件保存在 `data/jd_platform.db`
+- 默认使用 SQLite，本地数据文件保存在 `backend/data/jd_platform.db`
 - 默认启用爬虫，但可通过 `CRAWLER_ENABLED=false` 关闭
 - 默认 LLM provider 为 `mock`，离线可用
 - 保留 LangChain（OpenAI / Anthropic 真实接入仍可用）
 
 ## 2. 目录说明
 
-- `backend/`：FastAPI 后端
+- `backend/`：FastAPI 后端（`backend/data/` 存放本地数据库与简历文件）
 - `frontend/`：React + Vite 前端
-- `data/`：数据库和简历存储目录
 - `start.bat`：Windows 双击启动脚本
-- `.env.example`：环境变量示例
+- `backend/.env.example`：环境变量示例（应用实际读取的是 `backend/.env`）
+- `docs/`：设计文档
 
 ## 3. 一键启动（Windows）
 
@@ -53,9 +53,12 @@ npm run dev -- --host 0.0.0.0 --port 5173
 
 ## 5. 环境变量
 
-复制示例：
+配置模板是 `backend/.env.example`，**必须先进 `backend/` 目录**再复制。
+
+原因：`app/core/config.py` 里的 `env_file=".env"` 是相对路径，相对进程工作目录解析，而以 `start.bat` 方式启动时工作目录就是 `backend/`。根目录下的 `.env` 不会被读取。
 
 ```bat
+cd backend
 copy .env.example .env
 ```
 
@@ -67,6 +70,8 @@ DATABASE_SYNC_URL=sqlite:///./data/jd_platform.db
 LLM_DEFAULT_PROVIDER=mock
 CRAWLER_ENABLED=true
 ```
+
+> 注意：这里的 `./data/...` 是相对 `backend/` 的路径，即实际落在 `backend/data/`。
 
 ## 6. 本地开发与测试
 
@@ -89,13 +94,13 @@ npm run build
 默认数据库文件：
 
 ```text
-data/jd_platform.db
+backend/data/jd_platform.db
 ```
 
 简历原文件默认目录：
 
 ```text
-data/resumes/
+backend/data/resumes/
 ```
 
 ## 8. LLM 模式

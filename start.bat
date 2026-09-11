@@ -36,7 +36,7 @@ start "Frontend" cmd /k "cd /d %~dp0\frontend && npm run dev -- --host 0.0.0.0 -
 echo.
 echo [INFO] Backend: http://localhost:8000/docs
 echo [INFO] Frontend: http://localhost:5173
-echo [INFO] Local SQLite DB: .\data\jd_platform.db
+echo [INFO] Local SQLite DB: .\backend\data\jd_platform.db
 echo [INFO] Default LLM provider: mock
 echo.
 pause

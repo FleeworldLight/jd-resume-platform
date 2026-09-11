@@ -27,12 +27,16 @@ backend/.playwright-installed
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+*.tsbuildinfo
 
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
 *.log
+
+# WorkBuddy 本地状态（含 memory，不纳入版本管理）
+.workbuddy/
 
 # Keep resume folder structure
 !data/.gitkeep

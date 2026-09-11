@@ -14,6 +14,5 @@ import os
 # 测试环境：先设置 env，再 import app.*
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("DATABASE_SYNC_URL", "sqlite:///:memory:")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("LLM_DEFAULT_PROVIDER", "mock")
 os.environ.setdefault("EMBEDDING_DIM", "1024")
