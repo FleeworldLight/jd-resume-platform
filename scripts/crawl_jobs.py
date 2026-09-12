@@ -94,24 +94,67 @@ def jobs_to_results(jobs: list[NowcoderJob]) -> list[FetchResult]:
     ]
 
 
+# 牛客的招聘类型：1=校招, 2=实习, 0/3/4/5=其它专场。
+# 各类型的 totalCount 由站点给出（有上限，不是站点全部职位），互相之间有重叠，
+# 因此全量抓取需要按 job_id 去重合并。
+ALL_RECRUIT_TYPES = (0, 1, 2, 3, 4, 5)
+
+
+def parse_recruit_types(raw: str) -> list[int]:
+    """解析 --nowcoder-recruit-type：支持 '1'、'1,2,4'、'all'。"""
+    value = (raw or "").strip().lower()
+    if value in ("all", "*", ""):
+        return list(ALL_RECRUIT_TYPES) if value else [1]
+    types: list[int] = []
+    for piece in value.split(","):
+        piece = piece.strip()
+        if piece:
+            types.append(int(piece))
+    return types or [1]
+
+
 async def collect_nowcoder_api(args: argparse.Namespace, want: int) -> list[NowcoderJob]:
-    print(f"\n[NOWCODER] 走官方接口抓取（recruitType={args.nowcoder_recruit_type}）…")
+    types = parse_recruit_types(args.nowcoder_recruit_type)
+    mode_desc = "全量（多类型合并去重）" if len(types) > 1 else "单类型"
+    print(f"\n[NOWCODER] 走官方接口抓取 · {mode_desc} · recruitType={types}")
     client = NowcoderApiClient()
 
-    def on_page(page: int, got: int, total: Any = None, total_page: Any = None) -> None:
-        print(f"[NOWCODER] 第 {page} 页完成（本页累计 {got} 条 / 站点共 {total} 条，{total_page} 页）")
+    merged: dict[int, NowcoderJob] = {}
+    for rt in types:
+        def on_page(page: int, got: int, total: Any = None, total_page: Any = None,
+                    _rt: int = rt) -> None:
+            print(f"[NOWCODER] recruitType={_rt} 第 {page} 页完成"
+                  f"（本页累计 {got} / 站点 {total} 条，{total_page} 页）")
 
-    try:
-        jobs = await client.fetch_jobs(
-            limit=want,
-            recruit_type=args.nowcoder_recruit_type,
-            on_page=on_page,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[NOWCODER] 接口抓取失败: {type(exc).__name__}: {exc}")
-        return []
-    print(f"[NOWCODER] 接口返回 {len(jobs)} 条职位")
-    return jobs
+        try:
+            jobs = await client.fetch_jobs(
+                limit=want if want > 0 else 10**6,
+                recruit_type=rt,
+                on_page=on_page,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[NOWCODER] recruitType={rt} 抓取失败: {type(exc).__name__}: {exc}")
+            continue
+
+        added = 0
+        for job in jobs:
+            if job.job_id not in merged:
+                merged[job.job_id] = job
+                added += 1
+        print(f"[NOWCODER] recruitType={rt} 返回 {len(jobs)} 条，新增 {added} 条"
+              f"（累计唯一 {len(merged)}）")
+        if want > 0 and len(merged) >= want:
+            print(f"[NOWCODER] 已达目标 {want} 条，停止继续取类型")
+            break
+
+        # 类型之间稍作停顿，保持低频（整个全量通常也就十几次请求）
+        await asyncio.sleep(1.0)
+
+    result = list(merged.values())
+    if want > 0:
+        result = result[:want]
+    print(f"[NOWCODER] 合并去重后共 {len(result)} 条职位")
+    return result
 
 
 # ---------------- 牛客 / Boss：DOM 路径 ----------------
@@ -243,8 +286,8 @@ async def main() -> int:
     parser.add_argument("--per-source-limit", type=int, default=None, help="每个来源各抓这么多")
     parser.add_argument("--nowcoder-mode", choices=["api", "dom"], default="api",
                         help="牛客抓取方式：api=官方接口（默认、快），dom=逐页渲染抓取")
-    parser.add_argument("--nowcoder-recruit-type", type=int, default=1,
-                        help="牛客招聘类型，1=校招（默认）")
+    parser.add_argument("--nowcoder-recruit-type", default="1",
+                        help="牛客招聘类型：数字、逗号分隔（如 1,2,4）、或 all（全量多类型合并）")
     parser.add_argument("--nowcoder-url", default=DEFAULT_NOWCODER_LISTING)
     parser.add_argument("--query", default="Python", help="Boss 搜索关键词")
     parser.add_argument("--city", default=DEFAULT_BOSS_CITY, help="Boss 城市码，默认北京")

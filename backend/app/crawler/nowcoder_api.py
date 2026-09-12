@@ -8,16 +8,28 @@
 
 相比「每个职位开一次浏览器逐页抓 DOM」，走这个接口：
 
-* `pageSize` 可到 100，1 次请求就能拿到 100 条
-* 字段更全：薪资区间、薪资月数、城市、公司名、届别、行业、规模
-* 对目标站点压力小得多
+* `pageSize` 实测可到 200，一个招聘类型一次请求即可拿满
+* 字段更全：薪资、薪资单位、城市、公司名、届别、行业、规模
+* 对目标站点压力小得多（全量 6 个类型也才十几次请求）
 
-接口返回里混有**两种形态**，本模块都做了解析（实测 100 条中有 22 条属于形态 B）：
+接口返回里混有**两种形态**，本模块都做了解析（实测约 22% 属于形态 B）：
 
 * 形态 A —— 牛客平台职位：`jobName` / `jobCity` / `salaryMin|salaryMax|salaryMonth` /
-  `eduLevel` / `graduationYear` / `recommendInternCompany` / `ext`(JSON 字符串)
-* 形态 B —— 企业官网闪投：`jobTitle` / `description`(HTML) / `salary`(文本如「薪资面议」) /
+  `salaryType` / `eduLevel` / `graduationYear` / `recommendInternCompany` / `ext`(JSON 字符串)
+* 形态 B —— 企业官网闪投：`jobTitle` / `description`(HTML) / `salary`(文本) /
   `companyName` / `education`(中文) / `city` / `skills`
+
+薪资单位（重要，实测踩坑）
+--------------------------
+`salaryType` 与单位 **100% 对应**（各 100 条无交叉）：
+
+* `salaryType=2` → 月薪，单位 K/月，`salaryMonth` 为发薪月数（如 15 薪）
+* `salaryType=1` → 日薪，单位 元/天，页面显示如「500-550元/天」
+
+`jds.salary_min` / `salary_max` 两列在整个系统里按「月薪 K」呈现
+（前端直接渲染成 "20-30K"），因此**日薪不做折算、数值列留空**，
+只把原始文本写进 `salary_display` 与 `crawl_meta`。
+宁可缺数字，也不把 500元/天 混进月薪列、变成误导性的「500-550K」。
 
 设计约束：只调用站点自身前端使用的公开接口，未做任何绕过风控的处理。
 请保持低频访问，仅用于个人求职分析。
@@ -39,7 +51,8 @@ SEARCH_URL = "https://www.nowcoder.com/np-api/u/job/square-search"
 DETAIL_URL = "https://www.nowcoder.com/jobs/detail/{job_id}"
 
 RECRUIT_TYPE_SCHOOL = 1
-MAX_PAGE_SIZE = 100
+# 实测 pageSize 可到 200（再大按 200 处理），一个类型一次请求即可拿满
+MAX_PAGE_SIZE = 200
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -47,7 +60,12 @@ _UA = (
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
-_SALARY_RE = re.compile(r"(\d+)\s*-\s*(\d+)\s*K", re.IGNORECASE)
+_SALARY_MONTHLY_RE = re.compile(r"(\d+)\s*[-~]\s*(\d+)\s*K", re.IGNORECASE)
+_SALARY_DAILY_RE = re.compile(r"(\d+)\s*[-~]\s*(\d+)\s*元\s*/\s*天")
+
+# salaryType 取值 → 薪资单位
+SALARY_TYPE_MONTH = 2
+SALARY_TYPE_DAY = 1
 
 # eduLevel 数字码 → 中文。仅收录**已通过详情页反查核实**的取值，
 # 未知码一律留空，不做猜测。
@@ -81,12 +99,22 @@ def _html_to_text(raw: str) -> str:
     return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
-def _parse_salary_text(text: str) -> tuple[int | None, int | None]:
-    """从「15-25K」「薪资面议」这类文本里抠出薪资区间。"""
-    match = _SALARY_RE.search(text or "")
-    if not match:
-        return None, None
-    return int(match.group(1)), int(match.group(2))
+def _parse_salary_text(text: str) -> tuple[int | None, int | None, str]:
+    """解析形态 B 的 `salary` 文本，返回 (min, max, 原始显示文本)。
+
+    只有明确的「N-NK」月薪才写入数值列；「元/天」单位不同，
+    数值列留空、仅保留显示文本，避免把日薪混进月薪列。
+    """
+    if not text:
+        return None, None, ""
+    stripped = text.strip()
+    monthly = _SALARY_MONTHLY_RE.search(stripped)
+    if monthly:
+        return int(monthly.group(1)), int(monthly.group(2)), stripped
+    if _SALARY_DAILY_RE.search(stripped):
+        return None, None, stripped
+    # 「薪资面议」之类没有可解析的数值
+    return None, None, ""
 
 
 @dataclass
@@ -101,6 +129,7 @@ class NowcoderJob:
     salary_min: int | None = None
     salary_max: int | None = None
     salary_month: int | None = None
+    salary_display: str = ""  # 原始薪资文本，如「500-550元/天」
     education: str | None = None
     experience: str | None = None
     industry: str | None = None
@@ -131,7 +160,9 @@ def build_raw_text(job: NowcoderJob) -> str:
         head.append(f"公司：{job.company}")
     if job.city:
         head.append(f"城市：{job.city}")
-    if job.salary_min is not None and job.salary_max is not None:
+    if job.salary_display:
+        head.append(f"薪资：{job.salary_display}")
+    elif job.salary_min is not None and job.salary_max is not None:
         month = f" * {job.salary_month}薪" if job.salary_month else ""
         head.append(f"薪资：{job.salary_min}-{job.salary_max}K{month}")
     if job.education:
@@ -179,7 +210,15 @@ def _parse_platform_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
     edu_level = data.get("eduLevel")
     education = _EDU_LEVEL_MAP.get(edu_level) if isinstance(edu_level, int) else None
     city_list = data.get("jobCityList") or []
-    salary_min, salary_max = _clean_salary(data.get("salaryMin"), data.get("salaryMax"))
+
+    # ---- 薪资：按 salaryType 区分月薪 / 日薪 ----
+    salary_type = data.get("salaryType")
+    raw_min, raw_max = _clean_salary(data.get("salaryMin"), data.get("salaryMax"))
+    salary_min, salary_max, salary_display = raw_min, raw_max, ""
+    if raw_min is not None and salary_type == SALARY_TYPE_DAY:
+        # 日薪（元/天）：数值列留空，只保留原始文本，避免单位混用
+        salary_display = f"{raw_min}-{raw_max}元/天"
+        salary_min, salary_max = None, None
 
     job = NowcoderJob(
         job_id=int(job_id),
@@ -190,6 +229,7 @@ def _parse_platform_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
         salary_min=salary_min,
         salary_max=salary_max,
         salary_month=data.get("salaryMonth"),
+        salary_display=salary_display,
         education=education,
         experience=data.get("graduationYear"),
         industry=(company_info.get("industryTagNameList") or [None])[0],
@@ -201,7 +241,14 @@ def _parse_platform_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
             "company_id": data.get("companyId"),
             "recruit_type": data.get("recruitType"),
             "edu_level": edu_level,
+            "salary_type": salary_type,
+            "salary_unit": (
+                "day" if salary_type == SALARY_TYPE_DAY
+                else ("month" if salary_type == SALARY_TYPE_MONTH else None)
+            ),
             "salary_month": data.get("salaryMonth"),
+            "salary_raw": [data.get("salaryMin"), data.get("salaryMax")],
+            "salary_display": salary_display or None,
             "career_job_id": data.get("careerJobId"),
             "deliver_end": data.get("deliverEnd"),
         },
@@ -213,8 +260,16 @@ def _parse_platform_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
 def _parse_official_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
     """形态 B：企业官网闪投职位（description 为 HTML）。"""
     body = _html_to_text(str(data.get("description") or ""))
-    salary_min, salary_max = _parse_salary_text(str(data.get("salary") or ""))
+    salary_min, salary_max, salary_display = _parse_salary_text(
+        str(data.get("salary") or "")
+    )
     extra_info = data.get("extraInfo") or {}
+    if salary_display and _SALARY_DAILY_RE.search(salary_display):
+        salary_unit = "day"
+    elif salary_min is not None:
+        salary_unit = "month"
+    else:
+        salary_unit = None
 
     job = NowcoderJob(
         job_id=int(job_id),
@@ -224,6 +279,7 @@ def _parse_official_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
         city=data.get("city"),
         salary_min=salary_min,
         salary_max=salary_max,
+        salary_display=salary_display,
         education=data.get("education"),
         experience=None,
         industry=data.get("industry"),
@@ -238,6 +294,8 @@ def _parse_official_job(data: dict[str, Any], job_id: Any) -> NowcoderJob:
             "platform": data.get("platform"),
             "education_text": data.get("education"),
             "salary_text": data.get("salary"),
+            "salary_unit": salary_unit,
+            "salary_display": salary_display or None,
             "skills": data.get("skills"),
         },
     )

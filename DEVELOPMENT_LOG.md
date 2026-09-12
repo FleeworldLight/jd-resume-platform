@@ -324,3 +324,75 @@ Disallow: /                  ← 专门封禁"职位爬虫"类 UA
 
 已删除那条测试脏数据（jds 表回到 116 行，BOSS 来源 0 行）。
 `pytest` 55 项仍全部通过。
+
+---
+
+## 2026-09-12 牛客全量抓取
+
+### 规模探测
+
+牛客列表接口按 `recruitType` 分了多类，实测各类 `totalCount`：
+
+| recruitType | totalCount | 说明 |
+|---|---|---|
+| 0 / 3 | 100 | 其它专场 |
+| 1 | 200 | 校招 |
+| 2 | 147 | 实习 |
+| 4 / 5 | 200 | 其它专场 |
+
+另外发现 **`pageSize` 实测可到 200**（原先代码按 100 设限），
+即一个招聘类型一次请求就能拿满。注意各类型之间职位有大量重叠。
+
+### 全量策略与结果
+
+6 个类型各抓一遍 → 原始 947 条 → **按 `job_id` 合并去重后 447 条唯一职位**。
+
+- 入库：新增 405、更新 42；`jds` 表最终 **526 行**
+- 质量：`company` 非空 512、`position` 519、`city` 454、月薪非空 236
+- 公司 Top：联想 88、华为HUAWEI 46、重庆千里科技 35、拼多多集团-PDD 32、
+  华为软件技术 23、小红书 22
+- 抽样在线校验 25 条 → **25/25 与真实页面一致**
+
+对应 CLI：
+
+```bat
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder ^
+  --nowcoder-recruit-type all --limit 3000 --yes
+```
+
+### 修正：薪资单位（重要数据正确性问题）
+
+全量入库后静态校验发现 **101 条薪资异常**（`500-550K`、`990-1040K` 等）。定位过程：
+
+1. 这些行的 `salaryMonth` 都是 0；
+2. 用真实浏览器渲染详情页 → 页面实际显示 **「500-550元/天」**，是**日薪**而非月薪；
+3. 交叉验证 200 条 → **`salaryType` 与单位 100% 对应，无任何交叉**：
+   - `salaryType=2` → 月薪，单位 K/月，`salaryMonth` 为发薪月数（如 15 薪）
+   - `salaryType=1` → 日薪，单位 元/天
+
+**处理原则：不发明折算数字。**
+（`jds.salary_min/max` 列在整个系统里按「月薪 K」呈现，前端直接渲染成 "20-30K"；
+把 500 元/天 塞进去会变成误导性的「500-550K」。）
+
+日薪岗位改为：
+
+- `salary_min` / `salary_max` **置空**
+- 原始文本写入 `salary_display` 与 `structured.crawl_meta.salary_display`
+- `raw_text` 写真实文本「薪资：500-550元/天」
+- `crawl_meta.salary_unit` 标记 `day` / `month`，便于下游区分单位
+
+修正后静态校验「薪资不合理」= **0**；单位分布 `month=200 / day=100 / 空=224`。
+
+### verify_jds.py 同步修正
+
+校验脚本原先只比对数值列，会把 100 条日薪岗位**全部误报失败**。
+已改为按页面 `salaryType` 分支比对，并额外校验 `salary_unit` 与 `salary_display`。
+
+### 运行说明（本环境限制）
+
+- Bash 工具**禁止调用 `cmd.exe`**；PowerShell 调用 `.cmd` 同样被拦。
+  前端可绕过：用 `node node_modules/vite/bin/vite.js` 代替 `npm run dev`。
+- `nohup ... &` 与 PowerShell `Start-Process` 启动的进程，
+  **会在每次工具调用结束时被沙箱回收**，跨调用即掉线。
+- 可行方案：Bash 的 `run_in_background` 常驻任务（本次 task_id `5sOMvX`）。
+  若该任务被回收，双击项目根目录的 `start.bat` 即可启动。

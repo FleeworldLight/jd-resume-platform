@@ -140,9 +140,22 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder --limit
 | `--limit N` | 目标总条数（默认 100）；超过 300 需加 `--yes` |
 | `--source nowcoder \| boss \| all` | 抓取来源 |
 | `--nowcoder-mode api \| dom` | 牛客抓取方式；`api`（默认）走官方接口，`dom` 逐页渲染 |
+| `--nowcoder-recruit-type` | 牛客招聘类型：数字、逗号分隔（如 `1,2,4`）、或 `all`（全量合并去重） |
 | `--delay` | 请求间隔秒数（默认 1.5），**请勿设为 0** |
 | `--structure` | 抓完后额外跑一次 LLM 结构化（默认关闭） |
-| `--user-data-dir` | 持久化浏览器目录，可复用已登录会话（Boss 需要） |
+| `--user-data-dir` / `--storage-state` | 复用已登录会话（Boss 需要） |
+
+全量抓取（6 个招聘类型合并去重，实测得到 447 条唯一职位）：
+
+```bat
+backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder ^
+  --nowcoder-recruit-type all --limit 3000 --yes
+```
+
+> **薪资单位说明**：牛客有两种薪资口径，由 `salaryType` 区分（实测 100% 对应）——
+> `2` 为月薪（K/月），`1` 为日薪（元/天）。`salary_min/salary_max` 两列在系统里
+> 按「月薪 K」呈现，因此**日薪岗位的数值列留空**，原始文本存在
+> `structured.crawl_meta.salary_display` 并写入正文，避免出现「500-550K」这类误导值。
 
 ### 10.2 清理重复行
 

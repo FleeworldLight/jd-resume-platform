@@ -217,14 +217,35 @@ def compare_with_page(jd: Jd, html: str) -> tuple[bool, list[str]]:
         if meta.get("company_id") is not None and detail.get("companyId") != meta.get("company_id"):
             diffs.append(f"company_id: 库={meta.get('company_id')} 页面={detail.get('companyId')}")
 
-        exp_min, exp_max = _clean_salary(detail.get("salaryMin"), detail.get("salaryMax"))
-        if exp_min != jd.salary_min or exp_max != jd.salary_max:
-            diffs.append(
-                f"salary: 库={jd.salary_min}-{jd.salary_max} 页面={exp_min}-{exp_max}"
-            )
+        # 薪资：必须按页面的 salaryType 判定单位，否则日薪岗位会误报
+        #   salaryType=2 → 月薪(K/月)，数值列应与页面一致
+        #   salaryType=1 → 日薪(元/天)，数值列应为空，只保留文本
+        page_type = detail.get("salaryType")
+        page_min, page_max = detail.get("salaryMin"), detail.get("salaryMax")
+
         raw = meta.get("salary_raw")
-        if isinstance(raw, list) and raw != [detail.get("salaryMin"), detail.get("salaryMax")]:
-            diffs.append(f"salary_raw: 库={raw} 页面={[detail.get('salaryMin'), detail.get('salaryMax')]}")
+        if isinstance(raw, list) and raw != [page_min, page_max]:
+            diffs.append(f"salary_raw: 库={raw} 页面={[page_min, page_max]}")
+
+        if page_type == 1:
+            if jd.salary_min is not None or jd.salary_max is not None:
+                diffs.append(
+                    f"salary: 页面为日薪(元/天) {page_min}-{page_max}，"
+                    f"库内数值列应为空，实际={jd.salary_min}-{jd.salary_max}"
+                )
+            want = f"{page_min}-{page_max}元/天" if page_min is not None else ""
+            if want and meta.get("salary_display") != want:
+                diffs.append(
+                    f"salary_display: 库={meta.get('salary_display')!r} 期望={want!r}"
+                )
+            if meta.get("salary_unit") != "day":
+                diffs.append(f"salary_unit: 库={meta.get('salary_unit')!r} 期望='day'")
+        else:
+            exp_min, exp_max = _clean_salary(page_min, page_max)
+            if exp_min != jd.salary_min or exp_max != jd.salary_max:
+                diffs.append(
+                    f"salary: 库={jd.salary_min}-{jd.salary_max} 页面={exp_min}-{exp_max}"
+                )
 
         page_month = detail.get("salaryMonth")
         if meta.get("salary_month") is not None and page_month != meta.get("salary_month"):
