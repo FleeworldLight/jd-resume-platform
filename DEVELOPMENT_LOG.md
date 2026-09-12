@@ -396,3 +396,70 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder ^
   **会在每次工具调用结束时被沙箱回收**，跨调用即掉线。
 - 可行方案：Bash 的 `run_in_background` 常驻任务（本次 task_id `5sOMvX`）。
   若该任务被回收，双击项目根目录的 `start.bat` 即可启动。
+
+---
+
+## 2026-09-12（续）简历管理闭环修复
+
+### 用户反馈
+
+「没有任何功能是能跑通的」「上传简历这里为什么没法浏览简历」。
+需求：上传 → 拆解简历 → 在线编辑 → 保存 → 下载；首页入口改叫「简历管理」并加引导小字。
+
+### 排查结论
+
+1. **后端一直是正常的。** 实测完整链路：
+   上传 TXT → `parse_status=COMPLETED`（提取 268 字）→ 详情 → 下载原件 → 列表，全部 HTTP 200。
+   用户自己的 `陈晓阳 - 简历.pdf` 同样解析成功（1934 字），内容完整。
+2. **前端也没有报错。** Playwright 打开真实浏览器：零控制台错误、零失败请求、
+   上传成功、列表正常渲染。
+3. **「没法浏览文件」的直接原因**：之前把服务放在**内置预览面板**里展示，
+   那种沙箱 iframe 中**系统文件选择框不会弹出**。
+   正确做法是让用户用**自己的浏览器**打开 `http://localhost:5173`。
+4. **真实功能缺口**：确实不存在「在线编辑 / 保存 / 导出」，只有下载上传的原文件。
+
+### 新增后端接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `PUT` | `/api/resumes/{id}` | 保存在线编辑后的简历全文（写 `resume_text`），并重建向量索引 |
+| `GET` | `/api/resumes/{id}/export?fmt=pdf\|docx\|txt` | 导出**编辑后**的版本 |
+
+- `ResumeService.update_text()` / `ResumeService.export_bytes()`
+- `app/utils/pdf.py` 新增 `render_resume_pdf()`：复用 reportlab + `STSong-Light`
+  中文字体（无系统字体依赖），短行当小标题、`-`/`•` 开头当列表项
+- `schemas/resume.py` 新增 `ResumeUpdateRequest`
+
+### 前端改动
+
+- **`pages/Resumes.tsx` 整体重写**
+  - 上传区改为**可点击 + 可拖拽**的大方框，用 `label htmlFor` 原生触发文件选择
+    （比 `onClick → input.click()` 更稳），文案：「点击这里选择简历文件」
+    「也可以把文件直接拖进这个方框」+ 绿色「选择文件」按钮
+  - 顶部流程引导条：上传 → 自动拆解 → 在线编辑 → 导出
+  - 「查看 / 编辑」打开编辑器：字数 / 行数统计、未保存提示、保存、
+    重新解析、导出 PDF/DOCX/TXT、下载原件
+- `Layout.tsx`：导航「简历」→「简历管理」
+- `Dashboard.tsx`：首页卡片「上传简历」→「简历管理」，
+  引导小字改为「上传 → 自动拆解 → 在线编辑 → 导出下载」
+- `api.ts`：`download()` 增加 content-type 判断。
+  后端把业务异常也包成 HTTP 200 + `Result` JSON，
+  不判断就会**把错误信息当成文件下载下来**（得到一个 .pdf 的 JSON）。
+
+### 验证
+
+Playwright 真实浏览器端到端（零控制台报错）：
+
+打开编辑器载入 292 字 → 编辑出现「有未保存修改」→ 保存显示「已保存」→
+**刷新后改动持久化（312 字）** → 导出 `test_resume.pdf` 3261 字节 /
+`test_resume.docx` 35808 字节。
+
+`tsc --noEmit` 通过；`pytest` 55 项通过。
+
+### 两条教训
+
+1. **不要把依赖系统对话框的功能（文件选择、下载）放在沙箱预览面板里演示**，
+   要让用户用自己的浏览器打开。
+2. Playwright 定位按钮应用 `get_by_role("button", name=...)`；
+   `get_by_text` 会先匹配到没有 `onClick` 的外层 `div`，
+   造成「点了没反应」的假象（本次就因此误判过一次）。
