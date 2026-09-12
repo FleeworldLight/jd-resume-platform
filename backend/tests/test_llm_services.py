@@ -1,4 +1,9 @@
-"""测试：Mock LLMService + 3 个 LLM 子服务。"""
+"""测试：Mock LLMService + 3 个 LLM 子服务。
+
+两条路径都要覆盖：
+* 真实 provider（provider_type != "mock"）→ 走 LLM
+* mock provider（默认、离线）→ 走本地规则兜底
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -20,12 +25,22 @@ from app.schemas.customization import (
 )
 from app.services.customize_service import CustomizeService
 from app.services.gap_analysis_service import GapAnalysisService
+from app.services.llm_service import _build_mock_output
 from app.services.predict_service import PredictService
 
 
-def _make_llm(return_value):
+def _make_llm(return_value, provider_type: str = "openai"):
+    """构造一个假 LLMService。
+
+    provider_type="openai" → 子服务走 LLM 分支（structured_invoke 被调用）
+    provider_type="mock"   → 子服务走本地规则分支
+    """
     llm = MagicMock()
     llm.structured_invoke = AsyncMock(return_value=return_value)
+    provider = MagicMock()
+    provider.provider_type = provider_type
+    provider.name = provider_type
+    llm.get_default_provider = AsyncMock(return_value=provider)
     return llm
 
 
@@ -58,6 +73,9 @@ def _make_resume() -> Resume:
     return r
 
 
+# ---------------- LLM 路径 ----------------
+
+
 @pytest.mark.asyncio
 async def test_gap_analysis_calls_llm_and_returns() -> None:
     expected = GapReport(
@@ -72,8 +90,8 @@ async def test_gap_analysis_calls_llm_and_returns() -> None:
 
     out = await svc.analyze(_make_jd(), _make_resume())
 
-    assert out is expected
     assert out.match_score == 75
+    assert out.extract_mode == "llm"
     llm.structured_invoke.assert_awaited_once()
 
 
@@ -99,6 +117,7 @@ async def test_customize_service_returns_resume() -> None:
     out = await svc.customize(_make_jd(), _make_resume(), gap)
     assert out.summary.startswith("资深")
     assert len(out.experiences) == 1
+    assert out.extract_mode == "llm"
 
 
 @pytest.mark.asyncio
@@ -120,3 +139,79 @@ async def test_predict_service_returns_questions() -> None:
 
     out = await svc.predict(_make_jd(), customized, question_count=3)
     assert out.questions[0].difficulty == "HARD"
+    assert out.extract_mode == "llm"
+
+
+# ---------------- mock 路径（本地规则兜底） ----------------
+
+
+@pytest.mark.asyncio
+async def test_gap_analysis_uses_rules_when_mock() -> None:
+    """mock 下不再返回占位值，而是真的做技能集合比对。"""
+    llm = _make_llm(None, provider_type="mock")
+    svc = GapAnalysisService(llm)
+
+    out = await svc.analyze(_make_jd(), _make_resume())
+
+    assert out.extract_mode == "heuristic"
+    assert "Python" in out.matched_skills          # JD 与简历都有
+    assert [m.skill for m in out.missing_skills] == ["Kafka"]  # JD 有、简历没有
+    assert out.match_score == 50                   # 1/2 覆盖
+    llm.structured_invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_customize_uses_rules_when_mock_and_invents_nothing() -> None:
+    llm = _make_llm(None, provider_type="mock")
+    svc = CustomizeService(llm)
+    gap = GapReport(match_score=50, matched_skills=["Python"])
+
+    out = await svc.customize(_make_jd(), _make_resume(), gap)
+
+    assert out.extract_mode == "heuristic"
+    assert "Python" in out.skills
+    # 简历文本里没有带时间段的经历块 → 不能凭空造经历
+    assert out.experiences == []
+    llm.structured_invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_predict_uses_rules_when_mock() -> None:
+    llm = _make_llm(None, provider_type="mock")
+    svc = PredictService(llm)
+    gap = GapReport(
+        match_score=50,
+        matched_skills=["Python"],
+        missing_skills=[MissingSkill(skill="Kafka", priority="HIGH", reason="JD 要求")],
+    )
+
+    out = await svc.predict(
+        _make_jd(), CustomizedResume(summary="x"), question_count=2, gap=gap
+    )
+
+    assert out.extract_mode == "heuristic"
+    assert 1 <= len(out.questions) <= 2
+    assert out.questions[0].difficulty == "HARD"      # 缺失技能 → 高压追问
+    assert "Kafka" in out.questions[0].question
+    # STAR 必须是「让你自己填」的骨架，不能代写经历
+    assert out.questions[0].star_answer.situation.startswith("（填")
+    llm.structured_invoke.assert_not_awaited()
+
+
+# ---------------- 回归：mock 占位值生成 ----------------
+
+
+def test_build_mock_output_handles_required_fields() -> None:
+    """回归：必填字段（无 default 且 default_factory 为 None）曾导致
+
+    ``TypeError: 'NoneType' object is not callable`` ——
+    即用户看到的「差距分析失败: 'NoneType' object is not callable」。
+    """
+    report = _build_mock_output(GapReport)
+    assert report.match_score == 0
+    assert report.matched_skills == []
+
+    resume = _build_mock_output(CustomizedResume)
+    assert isinstance(resume.summary, str)
+
+    assert _build_mock_output(InterviewPrediction).questions == []

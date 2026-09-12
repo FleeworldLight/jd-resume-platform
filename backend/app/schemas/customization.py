@@ -30,6 +30,8 @@ class GapReport(BaseModel):
     missing_skills: list[MissingSkill] = Field(default_factory=list)
     experience_gaps: list[ExperienceGap] = Field(default_factory=list)
     recommended_focus: list[str] = Field(default_factory=list)
+    # 生成方式：llm（真实模型）/ heuristic（本地规则兜底，mock 下使用）
+    extract_mode: str | None = None
 
 
 # ---------- 定制简历 ----------
@@ -55,6 +57,7 @@ class CustomizedResume(BaseModel):
     experiences: list[Experience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
     highlights: list[str] = Field(default_factory=list)
+    extract_mode: str | None = None
 
 
 # ---------- 押题 ----------
@@ -76,6 +79,7 @@ class PredictedQuestion(BaseModel):
 
 class InterviewPrediction(BaseModel):
     questions: list[PredictedQuestion] = Field(default_factory=list)
+    extract_mode: str | None = None
 
 
 # ---------- 评估 ----------

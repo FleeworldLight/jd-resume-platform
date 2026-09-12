@@ -45,10 +45,17 @@ class CustomizationService:
         jd = await self._get_jd(jd_id)
         resume = await self._get_resume(base_resume_id)
 
-        if jd.crawl_status != "COMPLETED":
+        # PARSED：抓取阶段已把字段抽好（raw_text + 公司/岗位/城市/薪资…），
+        # COMPLETED：又跑过一遍结构化。两者都足以支撑差距分析，
+        # 只把 PENDING / PROCESSING / FAILED 拦掉。
+        if jd.crawl_status not in ("COMPLETED", "PARSED"):
             raise BusinessException(
                 ErrorCode.CUSTOMIZATION_INVALID_INPUT,
-                f"JD 状态为 {jd.crawl_status}，未完成结构化抽取",
+                f"JD 状态为 {jd.crawl_status}，尚未抓取完成，请先抓取或重新解析",
+            )
+        if not (jd.raw_text or "").strip():
+            raise BusinessException(
+                ErrorCode.CUSTOMIZATION_INVALID_INPUT, "JD 原文为空，无法分析"
             )
         if resume.parse_status != "COMPLETED":
             raise BusinessException(
@@ -134,7 +141,7 @@ class CustomizationService:
 
             # Step 5: 押题
             prediction = await self.predict.predict(
-                jd, customized, question_count=question_count
+                jd, customized, question_count=question_count, gap=gap_report
             )
 
             # Step 6: 落库
@@ -145,10 +152,13 @@ class CustomizationService:
             c.matched_resumes = [r.to_dict() for r in hybrid.results]
             c.status = "COMPLETED"
             c.completed_at = datetime.utcnow()
-            # 取默认 provider 名
+            # 取默认 provider 名（mock 下实际走的是本地规则，标注清楚免得误解）
             try:
                 provider = await self.llm.get_default_provider()
-                c.provider_used = provider.name
+                mode = (gap_report.extract_mode or "").strip()
+                c.provider_used = (
+                    f"{provider.name}（本地规则）" if mode == "heuristic" else provider.name
+                )
             except BusinessException:
                 c.provider_used = None
             await self.db.commit()

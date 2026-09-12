@@ -9,6 +9,7 @@ from app.db.models.jd import Jd
 from app.db.models.resume import Resume
 from app.prompts import GAP_ANALYSIS_PROMPT_V1
 from app.schemas.customization import GapReport
+from app.services.heuristic_pipeline import analyze_gap
 from app.services.llm_service import LLMService
 
 logger = get_logger(__name__)
@@ -24,7 +25,17 @@ class GapAnalysisService:
         if not resume.resume_text:
             raise BusinessException(ErrorCode.RESUME_NOT_FOUND, "简历文本为空")
         try:
-            return await self.llm.structured_invoke(
+            provider = await self.llm.get_default_provider()
+            if getattr(provider, "provider_type", None) == "mock":
+                # 默认 provider 是 mock（离线），LLM 路径只会返回占位值 →
+                # 改走规则比对，让「差距分析」在没有真实模型时也能给出可用结果。
+                report = analyze_gap(
+                    jd.raw_text, list(jd.skills or []), resume.resume_text
+                )
+                report.extract_mode = "heuristic"
+                return report
+
+            report = await self.llm.structured_invoke(
                 prompt_template=GAP_ANALYSIS_PROMPT_V1,
                 input_vars={
                     "jd_text": jd.raw_text,
@@ -33,6 +44,8 @@ class GapAnalysisService:
                 },
                 output_schema=GapReport,
             )
+            report.extract_mode = "llm"
+            return report
         except BusinessException:
             raise
         except Exception as exc:  # noqa: BLE001

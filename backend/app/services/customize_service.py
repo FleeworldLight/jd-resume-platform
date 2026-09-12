@@ -7,6 +7,7 @@ from app.db.models.jd import Jd
 from app.db.models.resume import Resume
 from app.prompts import CUSTOMIZE_PROMPT_V1
 from app.schemas.customization import CustomizedResume, GapReport
+from app.services.heuristic_pipeline import customize_resume
 from app.services.llm_service import LLMService
 
 logger = get_logger(__name__)
@@ -20,7 +21,16 @@ class CustomizeService:
         self, jd: Jd, resume: Resume, gap: GapReport
     ) -> CustomizedResume:
         try:
-            return await self.llm.structured_invoke(
+            provider = await self.llm.get_default_provider()
+            if getattr(provider, "provider_type", None) == "mock":
+                # mock 下改走规则：只重排简历里已有的信息，不编造经历
+                result = customize_resume(
+                    jd.raw_text or "", jd.position, resume.resume_text or "", gap
+                )
+                result.extract_mode = "heuristic"
+                return result
+
+            result = await self.llm.structured_invoke(
                 prompt_template=CUSTOMIZE_PROMPT_V1,
                 input_vars={
                     "jd_text": jd.raw_text or "",
@@ -29,6 +39,8 @@ class CustomizeService:
                 },
                 output_schema=CustomizedResume,
             )
+            result.extract_mode = "llm"
+            return result
         except BusinessException:
             raise
         except Exception as exc:  # noqa: BLE001

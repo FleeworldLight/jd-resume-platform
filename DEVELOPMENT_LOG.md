@@ -584,3 +584,106 @@ Playwright 真实浏览器端到端（零控制台报错）：
   关键词「算法」220 条、城市「北京」55 条、重置恢复、详情弹窗可开可关（ESC）、
   **零控制台错误、零失败请求**
 - 修掉一个自查发现的 bug：薪资区间的 `salary_min/max` 没被序列化进请求参数
+
+---
+
+## 2026-09-12（续四）定制化模块：修崩溃 + 放开状态限制 + 离线规则兜底
+
+用户反馈：发起定制化报 `差距分析失败: 'NoneType' object is not callable`。
+
+### 1. 根因：Pydantic v2 的 `default_factory` 是 `None`
+
+`app/services/llm_service.py` 的 `_mock_field_value`：
+
+```python
+if field.default_factory is not PydanticUndefined:   # ← 错
+    return field.default_factory()
+```
+
+Pydantic v2 里「没有 default_factory」的值是 **`None`**，不是 `PydanticUndefined`
+（后者只用于 `default`）。所以对**必填字段**（如 `GapReport.match_score`）会执行 `None()`。
+
+复现验证：
+```
+match_score  default = PydanticUndefined | default_factory = None
+JdStructured         OK   （字段都有默认值，提前返回）
+GapReport            失败 -> TypeError: 'NoneType' object is not callable
+CustomizedResume     失败 -> TypeError: 'NoneType' object is not callable
+```
+`JdStructured` 全部字段可选 → 一直没暴露；`GapReport` / `CustomizedResume` 有必填字段 → 必炸。
+
+修复：`factory = field.default_factory; if factory is not None and factory is not PydanticUndefined: return factory()`。
+
+### 2. 放开 JD 状态限制（第二个更严重的问题）
+
+定制化原来只接受 `crawl_status == "COMPLETED"` 的 JD。但**全量抓取写入的是 `PARSED`**：
+
+| 状态 | 条数 |
+|---|---|
+| PARSED | 4814 |
+| COMPLETED | 10 |
+
+也就是说 **4822 条岗位里只有 10 条能被选中做定制化**，前端下拉还只取 50 条。
+现在改为接受 `PARSED` 与 `COMPLETED`（两者都有 raw_text + 字段），
+并额外校验 `raw_text` 非空；`PENDING/PROCESSING/FAILED` 照旧拦下。
+
+### 3. mock provider 下补「离线规则兜底」
+
+和之前 JD 结构化同样的思路：默认 provider 是 mock，三步只会返回占位值，
+修好崩溃后模块也仍然"看起来是坏的"。新增 `app/services/heuristic_pipeline.py`：
+
+| 函数 | 做法 | 诚实边界 |
+|---|---|---|
+| `analyze_gap` | 技能集合比对：JD 要求（词典 + 结构化字段）∩ 简历体现 | 匹配度 = `round(100 × 已匹配 / JD要求数)`，可解释 |
+| `customize_resume` | 按 JD 相关度**重排简历已有信息** + 解析出经历/教育 | **不新增任何事实**，不编造经历 |
+| `predict_questions` | 题目原文取自 JD 真实句子（缺失技能→高压追问，匹配技能→项目深挖，职责句→行为面） | STAR 只给「（填背景…）」**填空骨架**，不代写经历 |
+
+三个服务的分支：`provider_type == "mock"` → 规则；否则 → LLM。结果都写
+`extract_mode = "heuristic" / "llm"`，落库后前端用黄色横幅提示"当前结果是本地规则生成的"。
+`provider_used` 也标成 `mock（本地规则）`。
+
+### 4. 验证：匹配器准确性（避免误报）
+
+用户简历（大数据方向）对「AI推理引擎工程师」JD 得 0 分，先怀疑是不是匹配器坏了。
+直接 grep 原文确认：`Python`/`C++`/`深度学习`/`大模型` **出现 0 次** → 0 分是**真实的**。
+再用「大数据开发工程师」JD 验证：匹配度 40~50，命中 `Java/Flink/Spark/Hive/Hadoop`。
+→ 匹配器工作正常。
+
+简历结构解析（实测有效）：识别出 4 段经历 + 教育 + 每段技术栈：
+```
+2026-03 ~ 2026-06 | 短视频平台内容分析系统 | 数据仓库课程 核心开发 | 要点7 栈7
+2026-03 ~ 2026-06 | 基于 Flink 的电子游戏数据处理与分析 | 大数据应用课程 | 要点3 栈5
+...
+教育: 江城理工大学 数据科学与大数据技术 2023-09 ~ 2027-06
+```
+
+### 5. 前端改动（pages/Customizations.tsx）
+
+- **JD 选择器改为搜索式**：4800+ 条岗位不可能全量下拉 → 关键词输入 + 防抖搜索
+  （`/api/jds?page_size=20&keyword=`）+ 点选列表 + 已选高亮
+- 发起后直接打开报告；提交按钮带「正在跑流水线…」状态
+- 报告顶部：命中 `extract_mode = heuristic` 时显示黄色说明横幅
+- 新增「硬性条件差距」区块（学历/届别比对）
+- 召回指标下方加注：库里只有 1 份简历时指标恒为 1.0，无区分度
+- 移除了无用的轮询（流水线是同步执行的）
+
+### 6. 测试
+
+原 `test_llm_services.py` 用 `MagicMock` 造 LLM，而子服务现在会
+`await llm.get_default_provider()` → MagicMock 不可 await，3 个测试失败。
+按新契约重写并**新增 4 个测试**：
+
+- `test_gap_analysis_uses_rules_when_mock`（规则分支：匹配 Python、缺 Kafka、50 分）
+- `test_customize_uses_rules_when_mock_and_invents_nothing`（**断言不编造经历**）
+- `test_predict_uses_rules_when_mock`（HARD 追问 + STAR 必须是「（填…）」骨架）
+- `test_build_mock_output_handles_required_fields`（**本次崩溃的回归测试**）
+
+`pytest` **59 项全部通过**（原 55 + 新增 4）；`tsc --noEmit` 通过。
+
+### 7. 端到端验证
+
+- 3 条历史 `FAILED` 任务全部 `retry` 成功 → `COMPLETED`，provider = `mock（本地规则）`
+- 用 `PARSED` 状态的 JD 新建任务 → 成功（验证放开了状态限制）
+- Playwright 真实浏览器：搜索「大数据」→ 20 条候选 → 点选 → 发起 →
+  报告完整渲染（匹配度 / 缺失技能带 JD 证据 / 定制简历 / 6 道押题 / 召回指标），
+  **零控制台错误、零失败请求**

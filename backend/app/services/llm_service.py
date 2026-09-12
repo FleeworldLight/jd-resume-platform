@@ -165,8 +165,13 @@ def _mock_field_value(annotation: Any, field: Any) -> Any:
     # 字段自带默认值/工厂 → 直接用（保持结构完整、列表为空等）
     if field.default is not PydanticUndefined:
         return field.default
-    if field.default_factory is not PydanticUndefined:
-        return field.default_factory()
+    # 注意：Pydantic v2 里「没有 default_factory」是 None，而不是 PydanticUndefined。
+    # 原先只判 `is not PydanticUndefined`，于是对**必填字段**会执行 None()，
+    # 抛 `TypeError: 'NoneType' object is not callable`——
+    # 这正是「差距分析失败: 'NoneType' object is not callable」的根因。
+    factory = field.default_factory
+    if factory is not None and factory is not PydanticUndefined:
+        return factory()
 
     origin = get_origin(annotation)
     args = get_args(annotation)
