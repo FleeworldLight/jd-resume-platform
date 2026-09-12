@@ -38,3 +38,9 @@ class ResumeStatusResponse(BaseModel):
     id: int
     parse_status: str
     parse_error: str | None = None
+
+
+class ResumeUpdateRequest(BaseModel):
+    """在线编辑保存：提交编辑后的简历全文。"""
+
+    resume_text: str = Field(min_length=1, description="编辑后的简历全文（纯文本）")

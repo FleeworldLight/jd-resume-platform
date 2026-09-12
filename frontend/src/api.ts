@@ -80,13 +80,28 @@ export const api = {
   },
   download: async (path: string, filename: string) => {
     const res = await fetch(BASE + path);
-    if (!res.ok) throw new ApiError(-1, `下载失败: HTTP ${res.status}`);
+    const ct = res.headers.get("content-type") || "";
+    // 后端把业务异常也包成 HTTP 200 + Result JSON，
+    // 不判断 content-type 就会把错误信息当成文件下载下来。
+    if (!res.ok || ct.includes("application/json")) {
+      const text = await res.text();
+      let msg = `下载失败: HTTP ${res.status}`;
+      try {
+        const j = JSON.parse(text) as { message?: string };
+        if (j.message) msg = j.message;
+      } catch {
+        /* 非 JSON，保留默认信息 */
+      }
+      throw new ApiError(res.status || -1, msg);
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   },
   downloadPdf: async (id: number) => {

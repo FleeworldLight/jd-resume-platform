@@ -239,6 +239,74 @@ class ResumeService:
         if resume.parse_status == "COMPLETED" and resume.resume_text:
             await self._index_resume_embedding(resume_id)
 
+    # ---------- 在线编辑保存 ----------
+    async def update_text(self, resume_id: int, text: str) -> Resume:
+        """保存「在线编辑」后的简历全文，并重建向量索引。
+
+        注意与原始文件的区别：这里改的是 `resume_text`（解析后的可编辑文本），
+        不覆盖用户上传的原文件，原文件仍可通过 /file 下载。
+        """
+        if not text or not text.strip():
+            raise BusinessException(ErrorCode.INVALID_PARAMS, "简历内容不能为空")
+        resume = await self.get(resume_id)
+        resume.resume_text = text
+        # 手工编辑视为已完成解析，避免前端一直轮询
+        resume.parse_status = "COMPLETED"
+        resume.parse_error = None
+        await self.db.commit()
+        await self.db.refresh(resume)
+        await self._index_resume_embedding(resume_id)
+        logger.info("resume.text_updated", resume_id=resume_id, length=len(text))
+        return resume
+
+    # ---------- 导出编辑后的版本 ----------
+    async def export_bytes(self, resume_id: int, fmt: str) -> tuple[bytes, str, str]:
+        """导出简历。返回 (内容字节, 下载文件名, media_type)。
+
+        导出的始终是 `resume_text`（可能已被在线编辑），不是上传的原文件。
+        """
+        resume = await self.get(resume_id)
+        text = (resume.resume_text or "").strip()
+        if not text:
+            raise BusinessException(
+                ErrorCode.INVALID_PARAMS, "简历内容为空，无法导出（可先重新解析或在线编辑）"
+            )
+
+        stem = Path(resume.original_filename).stem or f"resume_{resume.id}"
+        fmt = (fmt or "pdf").lower()
+
+        if fmt == "txt":
+            return text.encode("utf-8"), f"{stem}.txt", "text/plain; charset=utf-8"
+
+        if fmt == "docx":
+            try:
+                from docx import Document
+            except ImportError as exc:
+                raise BusinessException(
+                    ErrorCode.INTERNAL_ERROR, "缺少 python-docx，无法导出 DOCX"
+                ) from exc
+            from io import BytesIO as _BytesIO
+
+            doc = Document()
+            for line in text.splitlines():
+                doc.add_paragraph(line)
+            buf = _BytesIO()
+            doc.save(buf)
+            return (
+                buf.getvalue(),
+                f"{stem}.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        if fmt == "pdf":
+            from app.utils.pdf import render_resume_pdf
+
+            return render_resume_pdf(text, title=stem), f"{stem}.pdf", "application/pdf"
+
+        raise BusinessException(
+            ErrorCode.INVALID_PARAMS, f"不支持的导出格式: {fmt}（可选 pdf / txt / docx）"
+        )
+
     async def _extract_text(self, storage_path: str | None, filename: str) -> str:
         if not storage_path:
             raise BusinessException(ErrorCode.STORAGE_READ_FAILED, "简历文件路径缺失")

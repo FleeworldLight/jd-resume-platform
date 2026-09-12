@@ -42,7 +42,7 @@ export default function Dashboard() {
         <section>
           <div className="flex items-end justify-between mb-3"><div><p className="eyebrow">WORKFLOW</p><h2 className="text-xl font-bold">从资料到投递</h2></div><span className="text-xs text-slate-400">4 个核心步骤</span></div>
           <div className="grid sm:grid-cols-2 gap-4">
-            <QuickLink to="/resumes" title="上传简历" desc="PDF / DOCX / TXT" icon={FileText} number="01" />
+            <QuickLink to="/resumes" title="简历管理" desc="上传 → 自动拆解 → 在线编辑 → 导出下载" icon={FileText} number="01" />
             <QuickLink to="/jds" title="提交目标职位" desc="粘贴文本或职位 URL" icon={BriefcaseBusiness} number="02" />
             <QuickLink to="/customizations" title="发起定制化" desc="差距分析与面试押题" icon={Sparkles} number="03" />
             <QuickLink to="/settings" title="模型管理" desc="配置默认 LLM Provider" icon={Server} number="04" />
@@ -56,7 +56,7 @@ export default function Dashboard() {
 
       <section className="border-t pt-6"><p className="eyebrow">GET STARTED</p><h2 className="text-xl font-bold mb-3">推荐使用顺序</h2><ol className="grid md:grid-cols-5 gap-3 text-sm text-slate-600">
         <li>在「模型管理」新增一个 Provider（API Key 必填）并设为默认</li>
-        <li>「简历」上传一份基础简历 → 等待解析完成</li>
+        <li>「简历管理」上传一份基础简历 → 自动拆解为可编辑文本 → 需要时直接改并导出</li>
         <li>「JD」粘贴 JD 文本 → 等待结构化完成</li>
         <li>「定制化」选 (JD, 简历) 发起 → 轮询到 COMPLETED</li>
         <li>点详情查看 差距 / 定制 / 押题 / 召回指标，并导出 PDF</li>

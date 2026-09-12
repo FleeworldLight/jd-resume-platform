@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from app.schemas.resume import (
     ResumeList,
     ResumeResponse,
     ResumeStatusResponse,
+    ResumeUpdateRequest,
 )
 from app.services.resume_service import ResumeService
 
@@ -101,6 +102,7 @@ async def download_resume_file(
     resume_id: int,
     service: ResumeService = Depends(_service),
 ):
+    """下载**上传的原文件**（不改动）。"""
     resume = await service.get(resume_id)
     if not resume.storage_path:
         from app.core.exceptions import BusinessException, ErrorCode
@@ -108,3 +110,37 @@ async def download_resume_file(
         raise BusinessException(ErrorCode.STORAGE_READ_FAILED, "文件路径缺失")
     p = Path(resume.storage_path)
     return FileResponse(str(p), filename=os.path.basename(p))
+
+
+@router.put("/{resume_id}", response_model=Result[ResumeDetailResponse])
+async def update_resume(
+    resume_id: int,
+    body: ResumeUpdateRequest,
+    service: ResumeService = Depends(_service),
+) -> Result[ResumeDetailResponse]:
+    """保存在线编辑后的简历全文（写入 `resume_text`，不覆盖上传的原文件）。"""
+    resume = await service.update_text(resume_id, body.resume_text)
+    return Result.ok(ResumeDetailResponse.model_validate(resume))
+
+
+@router.get("/{resume_id}/export")
+async def export_resume(
+    resume_id: int,
+    fmt: str = "pdf",
+    service: ResumeService = Depends(_service),
+):
+    """导出**编辑后的简历**：pdf / txt / docx。
+
+    与 `/file` 的区别：/file 给的是上传的原文件，这里是 `resume_text`
+    （可能已经被在线编辑过）重新渲染出来的版本。
+    """
+    from urllib.parse import quote
+
+    content, filename, media_type = await service.export_bytes(resume_id, fmt)
+    # 文件名可能含中文，用 RFC 5987 形式，避免下载时乱码
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": disposition},
+    )

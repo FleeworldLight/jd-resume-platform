@@ -130,3 +130,62 @@ def _render_questions(questions: list[dict]) -> list[Paragraph]:
             out.append(Paragraph(f"关键点: {kps}", _S["small"]))
         out.append(Spacer(1, 6))
     return out
+
+
+# 简历导出用的样式（与报告区分：正文更大、行距更松）
+_S_RESUME = {
+    "title": ParagraphStyle("r_title", fontName=_FONT, fontSize=16, leading=22, spaceAfter=10),
+    "head": ParagraphStyle("r_head", fontName=_FONT, fontSize=12, leading=18, spaceBefore=10, spaceAfter=4),
+    "body": ParagraphStyle("r_body", fontName=_FONT, fontSize=10.5, leading=16.5),
+    "bullet": ParagraphStyle("r_bullet", fontName=_FONT, fontSize=10.5, leading=16.5, leftIndent=10),
+}
+
+
+def _looks_like_heading(line: str) -> bool:
+    """粗判小标题：较短、不含句末标点、不是以符号开头的列表项。"""
+    s = line.strip()
+    if not s or len(s) > 20:
+        return False
+    if s.startswith(("-", "•", "*", "·", "1", "2", "3", "4", "5")):
+        return False
+    return not s.endswith(("。", "，", "、", "；", "：", ".", ",", ";", ":", "!", "！"))
+
+
+def render_resume_pdf(text: str, title: str = "简历") -> bytes:
+    """把简历纯文本渲染为 PDF。
+
+    只做轻量排版：短行当小标题、以 - / • 开头的行当列表项、空行当段间距。
+    不追求模板级美观，但保证中文正常、内容不丢。
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        title=title,
+    )
+
+    story: list[Any] = [Paragraph(_esc(title), _S_RESUME["title"]), Spacer(1, 4)]
+    for raw_line in (text or "").splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            story.append(Spacer(1, 5))
+            continue
+        stripped = line.strip()
+        if stripped.startswith(("-", "•", "*", "·")):
+            story.append(Paragraph("• " + _esc(stripped.lstrip("-•*· ")), _S_RESUME["bullet"]))
+        elif _looks_like_heading(stripped):
+            story.append(Paragraph(_esc(stripped), _S_RESUME["head"]))
+        else:
+            story.append(Paragraph(_esc(stripped), _S_RESUME["body"]))
+
+    try:
+        doc.build(story)
+    except Exception as exc:  # noqa: BLE001
+        raise BusinessException(
+            ErrorCode.INTERNAL_ERROR, f"简历 PDF 导出失败: {exc}"
+        ) from exc
+    return buf.getvalue()

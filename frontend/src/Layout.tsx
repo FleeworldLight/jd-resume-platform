@@ -3,7 +3,7 @@ import { BriefcaseBusiness, FileText, Gauge, Settings, Sparkles } from "lucide-r
 
 const navItems = [
   { to: "/", label: "首页", icon: Gauge },
-  { to: "/resumes", label: "简历", icon: FileText },
+  { to: "/resumes", label: "简历管理", icon: FileText },
   { to: "/jds", label: "职位", icon: BriefcaseBusiness },
   { to: "/customizations", label: "定制化", icon: Sparkles },
   { to: "/settings", label: "设置", icon: Settings },
