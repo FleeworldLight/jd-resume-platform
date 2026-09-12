@@ -463,3 +463,124 @@ Playwright 真实浏览器端到端（零控制台报错）：
 2. Playwright 定位按钮应用 `get_by_role("button", name=...)`；
    `get_by_text` 会先匹配到没有 `onClick` 的外层 `div`，
    造成「点了没反应」的假象（本次就因此误判过一次）。
+
+---
+
+## 2026-09-12（续三）粘贴结构化报错修复 + 在招岗位改名/筛选 + 牛客数据量扩到 4803
+
+### 1. 修复 `MissingGreenlet`（用户粘贴 JD 报 500）
+
+**现象**：`POST /api/jds/text` 返回
+`内部错误: 1 validation error for JdResponse / updated_at / MissingGreenlet: greenlet_spawn has not been called`。
+
+**根因**（精确定位到 `app/db/base.py`）：
+`TimestampMixin` 用了 `server_default=func.now()` + **`onupdate=func.now()`**。
+服务端 `onupdate` 会让 SQLAlchemy 在 UPDATE 之后把该列标记为**已过期**，
+下次访问属性时必须再发一次 SELECT；而 Pydantic 的 `model_validate` 跑在
+异步会话上下文之外 → 抛 `MissingGreenlet`。
+
+**修复**（两处）：
+1. **全局**：`TimestampMixin` 改为 Python 侧的 `default=utcnow` / `onupdate=utcnow`
+   （`utcnow()` 返回 naive UTC，与 SQLite `CURRENT_TIMESTAMP` 口径一致）。
+   值在 flush 时就写入对象内存，永不过期 → 根治。
+2. **保险**：`structure_jd` commit 后 `refresh(jd, ["created_at", "updated_at"])`；
+   `create_from_text` 统一 `return await self.get(jd.id)`，确保交给 Pydantic 前字段已加载。
+
+### 2. 默认 provider 是 mock → 补规则抽取
+
+`llm_providers` 表里只有 `mock`。mock 只按 schema 返回占位值，所以
+「粘贴 → 结构化」即使不报错也是**全空字段**，看起来像功能坏了。
+
+新增 `app/services/heuristic_extract.py`：纯规则抽取
+（正则 + 段落切分 + 城市/技能词典）。`provider_type == "mock"` 时自动启用，
+结果标记 `structured["extract_mode"] = "heuristic"`；配置真实 provider 后自动走 LLM（`"llm"`）。
+
+实测（用户粘贴的网易游戏运营 JD）：职责 4 条、要求 5 条、学历「本科」全部正确抽出；
+结构化样例则抽出职位 / 公司 / 城市 / 薪资 25-40K / 本科 / 3-5年经验 / 6 个技能。
+
+### 3. 「职位」→「在招岗位」+ 筛选体系
+
+命名：导航、首页卡片、页面标题统一改为**在招岗位**；
+首页小字改为「抓取 / 筛选岗位，也可粘贴 JD 结构化」。
+
+后端新增/扩展：
+| 接口 | 说明 |
+|---|---|
+| `GET /api/jds` | 新增 `keyword / city / education / source / salary_min / salary_max / salary_only / sort` |
+| `GET /api/jds/facets` | 城市 / 学历 / 来源 / 薪资区间的命中数统计（给下拉框用） |
+| `POST /api/jds/{id}/reparse` | 按已有原文重新结构化 |
+| `POST /api/jds/crawl-nowcoder` | 一键抓取（走公开接口，秒级返回摘要） |
+
+`_apply_structured` 会**保留已有的 `crawl_meta`**，避免重新结构化把接口溯源信息冲掉。
+
+前端 `pages/Jds.tsx` 整体重写：防抖关键词搜索、6 个筛选控件（关键词/城市/学历/薪资区间/来源/排序）、
+「只看有薪资」开关、分页（12/24/48，上一页/下一页）、查看详情弹窗
+（职责 / 要求 / 原始 JD / 来源溯源）、重新解析、删除。
+
+### 4. 牛客数据量：447 → 4803（用户质疑成立）
+
+用户问「就 500 多条？」——质疑是对的。实测三条结论：
+
+1. `recruitType` **只有 0/1/2/3 返回不同数据**（100+200+147+100 → 去重 **447**）；
+   填 `4~30` 全部回落成与 `1` 相同的 200 条，**是噪声，不要扫**（旧代码扫 4/5 纯属浪费）。
+2. **`query` 关键词才是真正的扩展杠杆**：26 个词就把去重总量推到 2581。
+3. 另有 `/u/job/search`（750 条）与 `/u/job/list`（500 条）两个公开列表端点。
+
+实现 `NowcoderApiClient.fetch_all()`：分类轮 → 关键词轮（107 个种子，每词最多 2 页）
+→ 端点轮，按 `job_id` 去重，连续 15 个关键词无新增自动停止。
+新增 CLI 参数 `--nowcoder-scope {school,full}`。
+
+**本次全量结果**：`4803` 条唯一职位 → 入库新增 4278 + 更新 525，耗时 3 分 35 秒。
+
+### 5. 全量数据质量
+
+| 指标 | 结果 |
+|---|---|
+| `jds` 总行数 | **4824**（NOWCODER 4822 / MANUAL 2） |
+| position 非空 | 4819 |
+| company 非空 | 4814 |
+| city 非空 | 4211 |
+| education 非空 | 4226 |
+| experience 非空 | 4122 |
+| 月薪（K）非空 | 2373 |
+| 正文 ≥200 字 | 4709 |
+
+城市 Top：北京 992、上海 751、深圳 480、杭州 263、广州 205。
+公司 Top：华为 372、小米 238、快手 198、上海华为 124、途游游戏 119。
+
+**真实性抽检**（`verify_jds.py --live 30`，逐条打开真实页面比对字段）：**30/30 一致**。
+
+`source_url` 重复仅剩 1 组（ids 6/7/8，早期 DOM 抓取留下的带 query 参数 URL），
+可用 `scripts/dedupe_jds.py` 清理。
+
+### 6. 3 条「异常薪资」的溯源结论（不是我们的 bug）
+
+`salary_min >= 100K` 共 3 条，全部**打开真实页面核对**，页面显示与库内**逐字一致**：
+
+| id | 库内 / 页面显示 | 判断 |
+|---|---|---|
+| #491 | 置业顾问 · 200-260K * 12薪 | 站方原始数据 |
+| #657 | 群核科技 · 算法研究员（世界模型）100-150K * 16薪 | 站方原始数据 |
+| #4487 | 广东博迈医疗 · 设备工程师 6000-8500K * 13薪 | 站方**标注错误**（应为元） |
+
+结论：**我们忠实镜像了站点数据**，没有伪造也没有「顺手修数字」。
+上游的 3 条明显错标（尤其 6000-8500K）保留原样，避免引入我们自己的推测值。
+
+### 7. 血泪教训：同一文件不要并行发多个 Edit
+
+本次在**同一条消息里对同一个文件发两次 Edit**，结果只保留一处、另一处静默丢失：
+
+- `nowcoder_api.py`：`fetch_all()` 整个方法丢失（导致脚本 `NameError`）
+- `jd_service.py`：`extract_jd_heuristic` 的 import 丢失（导致接口 500）
+- `crawl_jobs.py`：`RECRUIT_TYPES_DISTINCT` 的 import 丢失（导致脚本启动即崩）
+
+**规则：一个文件一次只发一个 Edit**；需要多处改动就分多轮，或用 `Write` 整体重写。
+（2026-09-11 已记过一次，本次又犯。）
+
+### 8. 验证
+
+- `tsc --noEmit` 通过；`pytest` 55 项通过
+- Playwright 真实浏览器验证「在招岗位」页：导航/标题改名正确、6 个筛选控件可用、
+  关键词「算法」220 条、城市「北京」55 条、重置恢复、详情弹窗可开可关（ESC）、
+  **零控制台错误、零失败请求**
+- 修掉一个自查发现的 bug：薪资区间的 `salary_min/max` 没被序列化进请求参数

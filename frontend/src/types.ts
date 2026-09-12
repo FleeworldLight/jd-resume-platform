@@ -62,6 +62,46 @@ export interface JdStatus {
   has_structured: boolean;
 }
 
+export interface JdFacetItem {
+  value: string;
+  count: number;
+  min?: number | null;
+  max?: number | null;
+}
+
+export interface JdFacets {
+  total: number;
+  with_salary: number;
+  companies: number;
+  sources: JdFacetItem[];
+  cities: JdFacetItem[];
+  educations: JdFacetItem[];
+  salary_ranges: JdFacetItem[];
+}
+
+/** 列表筛选条件（与后端 GET /api/jds 的查询参数一一对应） */
+export interface JdQuery {
+  page: number;
+  page_size: number;
+  keyword: string;
+  city: string;
+  education: string;
+  source: string;
+  salary_only: boolean;
+  sort: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+}
+
+/** 一次批量抓取的结果摘要 */
+export interface JdCrawlSummary {
+  scanned: number;
+  inserted: number;
+  updated: number;
+  total: number;
+  message: string;
+}
+
 export interface Customization {
   id: number;
   jd_id: number;

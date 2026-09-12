@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_llm_service
 from app.core.result import Result
 from app.schemas.jd import (
+    JdCrawlSummary,
+    JdFacets,
     JdList,
     JdResponse,
     JdStatusResponse,
@@ -76,13 +78,57 @@ async def import_nowcoder_jobs(
     return Result.ok([JdResponse.model_validate(job) for job in jobs])
 
 
+@router.post("/crawl-nowcoder", response_model=Result[JdCrawlSummary])
+async def crawl_nowcoder_jobs(
+    limit: int = 60,
+    keyword: str | None = None,
+    recruit_type: int = 1,
+    service: JdService = Depends(_service),
+) -> Result[JdCrawlSummary]:
+    """一键抓取：走牛客公开接口，几秒内入库一批岗位。
+
+    全量（数千条）请用 ``scripts/crawl_jobs.py --nowcoder-scope full``。
+    """
+    stat = await service.crawl_nowcoder(
+        limit=limit, keyword=keyword, recruit_type=recruit_type
+    )
+    return Result.ok(
+        JdCrawlSummary(
+            **stat,
+            message=(
+                f"抓取 {stat['scanned']} 条，新增 {stat['inserted']}、"
+                f"更新 {stat['updated']}"
+            ),
+        )
+    )
+
+
 @router.get("", response_model=Result[JdList])
 async def list_jds(
     page: int = 1,
     page_size: int = 20,
+    keyword: str | None = None,
+    city: str | None = None,
+    education: str | None = None,
+    source: str | None = None,
+    salary_min: int | None = None,
+    salary_max: int | None = None,
+    salary_only: bool = False,
+    sort: str = "latest",
     service: JdService = Depends(_service),
 ) -> Result[JdList]:
-    items, total = await service.list(page=page, page_size=page_size)
+    items, total = await service.list(
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        city=city,
+        education=education,
+        source=source,
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_only=salary_only,
+        sort=sort,
+    )
     return Result.ok(
         JdList(
             items=[JdResponse.model_validate(j) for j in items],
@@ -91,6 +137,12 @@ async def list_jds(
             page_size=page_size,
         )
     )
+
+
+@router.get("/facets", response_model=Result[JdFacets])
+async def jd_facets(service: JdService = Depends(_service)) -> Result[JdFacets]:
+    """筛选项统计（城市 / 学历 / 来源 / 薪资区间）。"""
+    return Result.ok(JdFacets.model_validate(await service.facets()))
 
 
 @router.get("/{jd_id}", response_model=Result[JdResponse])
@@ -109,6 +161,16 @@ async def delete_jd(
 ) -> Result[None]:
     await service.delete(jd_id)
     return Result.ok(message="删除成功")
+
+
+@router.post("/{jd_id}/reparse", response_model=Result[JdResponse])
+async def reparse_jd(
+    jd_id: int,
+    service: JdService = Depends(_service),
+) -> Result[JdResponse]:
+    """按已有原文重新做一次结构化抽取（改了模型配置后可回填旧数据）。"""
+    jd = await service.reparse(jd_id)
+    return Result.ok(JdResponse.model_validate(jd))
 
 
 @router.get("/{jd_id}/status", response_model=Result[JdStatusResponse])

@@ -14,6 +14,9 @@
     # 牛客改走 DOM 抓取（默认走官方接口）
     ... --source nowcoder --nowcoder-mode dom --limit 20
 
+    # 牛客全量（分类 + 关键词 + 多端点，去重后 3000+ 条）
+    ... --source nowcoder --nowcoder-scope full --limit 5000 --yes
+
     # 先只看会发现什么，不入库
     ... --dry-run --limit 20
 
@@ -58,7 +61,12 @@ except Exception:  # noqa: BLE001
 from sqlalchemy import func, select  # noqa: E402
 
 from app.crawler.batch import FetchResult, fetch_details  # noqa: E402
-from app.crawler.nowcoder_api import NowcoderApiClient, NowcoderJob  # noqa: E402
+from app.crawler.nowcoder_api import (  # noqa: E402
+    KEYWORD_SEEDS,
+    RECRUIT_TYPES_DISTINCT,
+    NowcoderApiClient,
+    NowcoderJob,
+)
 from app.crawler.strategies.boss import BossCrawler  # noqa: E402
 from app.crawler.strategies.nowcoder import NowcoderCrawler  # noqa: E402
 from app.db.init_db import init_db  # noqa: E402
@@ -94,10 +102,9 @@ def jobs_to_results(jobs: list[NowcoderJob]) -> list[FetchResult]:
     ]
 
 
-# 牛客的招聘类型：1=校招, 2=实习, 0/3/4/5=其它专场。
-# 各类型的 totalCount 由站点给出（有上限，不是站点全部职位），互相之间有重叠，
-# 因此全量抓取需要按 job_id 去重合并。
-ALL_RECRUIT_TYPES = (0, 1, 2, 3, 4, 5)
+# 牛客的招聘类型。**实测只有 0/1/2/3 返回不同数据**，
+# 4 及以上（含 4~30）都会回落到与 1 相同的 200 条 → 扫了纯属浪费时间。
+ALL_RECRUIT_TYPES = RECRUIT_TYPES_DISTINCT
 
 
 def parse_recruit_types(raw: str) -> list[int]:
@@ -114,10 +121,27 @@ def parse_recruit_types(raw: str) -> list[int]:
 
 
 async def collect_nowcoder_api(args: argparse.Namespace, want: int) -> list[NowcoderJob]:
-    types = parse_recruit_types(args.nowcoder_recruit_type)
-    mode_desc = "全量（多类型合并去重）" if len(types) > 1 else "单类型"
-    print(f"\n[NOWCODER] 走官方接口抓取 · {mode_desc} · recruitType={types}")
+    """牛客接口抓取。
+
+    scope=school：只按 recruitType 分类取（0/1/2/3，约 450 条）
+    scope=full  ：再叠加关键词检索与其它列表端点，能拿到 3000+ 条（仍是去重后）
+    """
     client = NowcoderApiClient()
+
+    if getattr(args, "nowcoder_scope", "school") == "full":
+        print("\n[NOWCODER] 全量扫描：分类 × 关键词 × 多端点，按 job_id 去重合并")
+        print(f"[NOWCODER] 关键词种子 {len(KEYWORD_SEEDS)} 个，预计 200+ 次低频请求\n")
+
+        def on_progress(phase: str, label: str, total: int) -> None:
+            print(f"[NOWCODER] [{phase}] {label} → 累计唯一 {total}", flush=True)
+
+        jobs = await client.fetch_all(limit=want if want > 0 else 10**6, on_progress=on_progress)
+        print(f"\n[NOWCODER] 全量扫描结束，去重后共 {len(jobs)} 条职位")
+        return jobs[:want] if want > 0 else jobs
+
+    types = parse_recruit_types(args.nowcoder_recruit_type)
+    mode_desc = "多类型合并去重" if len(types) > 1 else "单类型"
+    print(f"\n[NOWCODER] 走官方接口抓取 · {mode_desc} · recruitType={types}")
 
     merged: dict[int, NowcoderJob] = {}
     for rt in types:
@@ -287,7 +311,9 @@ async def main() -> int:
     parser.add_argument("--nowcoder-mode", choices=["api", "dom"], default="api",
                         help="牛客抓取方式：api=官方接口（默认、快），dom=逐页渲染抓取")
     parser.add_argument("--nowcoder-recruit-type", default="1",
-                        help="牛客招聘类型：数字、逗号分隔（如 1,2,4）、或 all（全量多类型合并）")
+                        help="牛客招聘类型：数字、逗号分隔（如 1,2）、或 all（0/1/2/3 合并去重）")
+    parser.add_argument("--nowcoder-scope", choices=["school", "full"], default="school",
+                        help="牛客抓取范围：school=按分类（约 450 条）；full=分类+关键词+多端点（3000+ 条）")
     parser.add_argument("--nowcoder-url", default=DEFAULT_NOWCODER_LISTING)
     parser.add_argument("--query", default="Python", help="Boss 搜索关键词")
     parser.add_argument("--city", default=DEFAULT_BOSS_CITY, help="Boss 城市码，默认北京")

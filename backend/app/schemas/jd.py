@@ -59,8 +59,39 @@ class JdList(BaseModel):
     page_size: int
 
 
+class JdFacetItem(BaseModel):
+    """一个筛选项及其命中数量。"""
+
+    value: str
+    count: int
+    min: int | None = None
+    max: int | None = None
+
+
+class JdFacets(BaseModel):
+    """列表页筛选项统计。"""
+
+    total: int = 0
+    with_salary: int = 0
+    companies: int = 0
+    sources: list[JdFacetItem] = Field(default_factory=list)
+    cities: list[JdFacetItem] = Field(default_factory=list)
+    educations: list[JdFacetItem] = Field(default_factory=list)
+    salary_ranges: list[JdFacetItem] = Field(default_factory=list)
+
+
 class JdStatusResponse(BaseModel):
     id: int
     crawl_status: str
     crawl_error: str | None = None
     has_structured: bool = False
+
+
+class JdCrawlSummary(BaseModel):
+    """一次批量抓取的结果摘要。"""
+
+    scanned: int = 0
+    inserted: int = 0
+    updated: int = 0
+    total: int = 0
+    message: str = ""

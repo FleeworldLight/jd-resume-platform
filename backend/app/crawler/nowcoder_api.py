@@ -36,6 +36,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -53,6 +54,44 @@ DETAIL_URL = "https://www.nowcoder.com/jobs/detail/{job_id}"
 RECRUIT_TYPE_SCHOOL = 1
 # 实测 pageSize 可到 200（再大按 200 处理），一个类型一次请求即可拿满
 MAX_PAGE_SIZE = 200
+
+# ---- 全量扫描维度（实测结论，见 docs/crawler-nowcoder.md）----
+#
+# 1) recruitType：只有 0/1/2/3 返回**不同**的职位集合（100+200+147+100 = 447 条去重）；
+#    recruitType 填 4~30 都会回落到与 1 相同的 200 条，纯属噪声，不要扫。
+# 2) query 关键词：**真正的扩展杠杆**。26 个关键词就把去重总量从 447 推到 2581；
+#    关键词越多覆盖越全（每个词最多 2 页、pageSize=200）。
+# 3) /u/job/search 与 /u/job/list：另两个公开列表端点，分别 750 / 500 条。
+RECRUIT_TYPES_DISTINCT: tuple[int, ...] = (0, 1, 2, 3)
+
+# 关键词种子：技术栈 + 职能 + 行业，覆盖得越宽、去重后的总量越大
+KEYWORD_SEEDS: tuple[str, ...] = (
+    # —— 研发 / 技术方向 ——
+    "算法", "后端", "前端", "客户端", "测试", "测试开发", "运维", "安全",
+    "大数据", "数据", "数据分析", "数据开发", "人工智能", "机器学习", "深度学习",
+    "计算机视觉", "NLP", "推荐算法", "搜索算法", "大模型", "AIGC", "语音",
+    "嵌入式", "硬件", "芯片", "半导体", "射频", "天线", "结构", "仿真",
+    "自动驾驶", "机器人", "游戏", "音视频", "图形", "操作系统", "编译器",
+    "云计算", "网络", "通信", "电子", "电气", "机械", "自动化", "控制",
+    # —— 语言 / 技术栈 ——
+    "Java", "Python", "C++", "Go", "C#", "JavaScript", "TypeScript", "Rust",
+    "Android", "iOS", "Linux", "MySQL", "Redis", "Spring", "React", "Vue",
+    "Node", "Kotlin", "Swift", "FPGA", "Verilog", "MATLAB", "SQL",
+    # —— 产品 / 设计 / 运营 ——
+    "产品", "产品经理", "运营", "市场", "营销", "销售", "商务", "设计",
+    "UI", "交互", "视觉", "内容", "编辑", "项目管理",
+    # —— 职能 / 行业 ——
+    "财务", "会计", "人力", "人力资源", "行政", "法务", "供应链", "采购",
+    "物流", "咨询", "战略", "风控", "量化", "金融", "医疗", "生物", "化学",
+    "材料", "能源", "建筑", "土木", "教育", "客服", "管培生", "实习生",
+)
+
+# 其余公开列表端点：(路径, 最大页数)
+OTHER_ENDPOINTS: tuple[tuple[str, int], ...] = (("search", 4), ("list", 3))
+
+# 请求之间的礼貌间隔（秒）
+_POLITE_DELAY = 0.35
+
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -331,27 +370,52 @@ class NowcoderApiClient:
             "Origin": "https://www.nowcoder.com",
         }
 
-    async def search(
+    async def _search_with(
         self,
-        page: int = 1,
-        page_size: int = MAX_PAGE_SIZE,
-        recruit_type: int = RECRUIT_TYPE_SCHOOL,
+        client: httpx.AsyncClient,
+        *,
+        page: int,
+        page_size: int,
+        recruit_type: int,
+        query: str | None,
+        endpoint: str,
     ) -> dict[str, Any]:
-        """调用一次列表接口，返回 data 段。"""
-        body = {
+        """用传入的 client 调一次列表接口，返回 data 段。"""
+        body: dict[str, Any] = {
             "page": page,
             "pageSize": min(page_size, MAX_PAGE_SIZE),
             "recruitType": recruit_type,
         }
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            resp = await client.post(SEARCH_URL, json=body, headers=self._headers)
-            resp.raise_for_status()
-            payload = resp.json()
+        if query:
+            body["query"] = query
+        url = f"https://www.nowcoder.com/np-api/u/job/{endpoint}"
+        resp = await client.post(url, json=body, headers=self._headers)
+        resp.raise_for_status()
+        payload = resp.json()
         if payload.get("code") != 0:
             raise RuntimeError(
                 f"牛客接口返回异常: code={payload.get('code')} msg={payload.get('msg')}"
             )
         return payload.get("data") or {}
+
+    async def search(
+        self,
+        page: int = 1,
+        page_size: int = MAX_PAGE_SIZE,
+        recruit_type: int = RECRUIT_TYPE_SCHOOL,
+        query: str | None = None,
+        endpoint: str = "square-search",
+    ) -> dict[str, Any]:
+        """调用一次列表接口，返回 data 段。"""
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            return await self._search_with(
+                client,
+                page=page,
+                page_size=page_size,
+                recruit_type=recruit_type,
+                query=query,
+                endpoint=endpoint,
+            )
 
     async def fetch_jobs(
         self,
@@ -383,3 +447,114 @@ class NowcoderApiClient:
                 break
             page += 1
         return jobs[:limit]
+
+    async def fetch_all(
+        self,
+        limit: int = 6000,
+        on_progress: Any = None,
+        keyword_seeds: tuple[str, ...] | None = None,
+    ) -> list[NowcoderJob]:
+        """全量扫描：把站点能通过公开接口取到的职位尽量抓全。
+
+        分三轮，全部按 job_id 去重：
+
+        1. **分类轮**：recruitType 0/1/2/3（4 及以上是重复数据，不扫）
+        2. **关键词轮**：用 ``KEYWORD_SEEDS`` 逐个检索，每个词最多 2 页。
+           这是覆盖面最大的一轮（实测 26 个词就把去重总量从 447 推到 2581）。
+        3. **端点轮**：``/u/job/search``（约 750 条）与 ``/u/job/list``（约 500 条）
+        """
+        seeds = keyword_seeds or KEYWORD_SEEDS
+        seen: dict[int, NowcoderJob] = {}
+
+        def absorb(items: list[dict], via: str) -> int:
+            added = 0
+            for item in items:
+                job = parse_job(item)
+                if job is None or job.job_id in seen:
+                    continue
+                job.extra["via"] = via
+                seen[job.job_id] = job
+                added += 1
+            return added
+
+        def report(phase: str, label: str) -> None:
+            if on_progress:
+                try:
+                    on_progress(phase, label, len(seen))
+                except Exception:  # noqa: BLE001
+                    pass
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            # ---- 第 1 轮：分类 ----
+            for rt in RECRUIT_TYPES_DISTINCT:
+                if len(seen) >= limit:
+                    break
+                try:
+                    data = await self._search_with(
+                        client, page=1, page_size=MAX_PAGE_SIZE,
+                        recruit_type=rt, query=None, endpoint="square-search",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("nowcoder_api.round1_failed", rt=rt, error=str(exc))
+                    continue
+                absorb(data.get("datas") or [], f"recruitType={rt}")
+                report("分类", f"recruitType={rt}")
+                await asyncio.sleep(_POLITE_DELAY)
+
+            # ---- 第 2 轮：关键词 ----
+            empty_streak = 0
+            for kw in seeds:
+                if len(seen) >= limit:
+                    break
+                added_for_kw = 0
+                for page in (1, 2):
+                    try:
+                        data = await self._search_with(
+                            client, page=page, page_size=MAX_PAGE_SIZE,
+                            recruit_type=RECRUIT_TYPE_SCHOOL, query=kw,
+                            endpoint="square-search",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "nowcoder_api.keyword_failed", query=kw, page=page, error=str(exc)
+                        )
+                        break
+                    items = data.get("datas") or []
+                    if not items:
+                        break
+                    got = absorb(items, f"query={kw}")
+                    added_for_kw += got
+                    await asyncio.sleep(_POLITE_DELAY)
+                    # 这一页没有任何新职位 → 该关键词已被覆盖，不必再翻页
+                    if got == 0:
+                        break
+                report("关键词", kw)
+                empty_streak = empty_streak + 1 if added_for_kw == 0 else 0
+                # 连续 15 个关键词都毫无新增，基本可以认为已经扫干净了
+                if empty_streak >= 15:
+                    logger.info("nowcoder_api.keyword_saturated", total=len(seen))
+                    break
+
+            # ---- 第 3 轮：其它列表端点 ----
+            for endpoint, max_pages in OTHER_ENDPOINTS:
+                if len(seen) >= limit:
+                    break
+                for page in range(1, max_pages + 1):
+                    try:
+                        data = await self._search_with(
+                            client, page=page, page_size=MAX_PAGE_SIZE,
+                            recruit_type=RECRUIT_TYPE_SCHOOL, query=None, endpoint=endpoint,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "nowcoder_api.endpoint_failed", endpoint=endpoint, error=str(exc)
+                        )
+                        break
+                    items = data.get("datas") or []
+                    if not items:
+                        break
+                    absorb(items, f"{endpoint}#{page}")
+                    report("端点", f"{endpoint} 第 {page} 页")
+                    await asyncio.sleep(_POLITE_DELAY)
+
+        return list(seen.values())[:limit]

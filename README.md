@@ -109,6 +109,14 @@ backend/data/resumes/
 
 如果要接真实模型，可在 `LLM_DEFAULT_PROVIDER` 里切成 `openai` 或 `anthropic`，并填写对应 API Key。
 
+> **粘贴 JD 的结构化抽取怎么工作？**
+> - 默认（`mock`）：走**规则抽取**（`app/services/heuristic_extract.py`），
+>   用正则 + 段落切分 + 技能词典抽出职位 / 公司 / 城市 / 薪资 / 学历 / 经验 /
+>   技能 / 职责 / 要求，结果里标记 `structured.extract_mode = "heuristic"`。
+> - 配置了真实 provider 后：自动切回 LLM 路径，标记为 `"llm"`。
+>
+> 换句话说，**没有 API Key 也能用「粘贴 → 结构化」**，只是精度不如真实模型。
+
 ## 9. 说明
 
 - 当前版本已去掉 Docker / Redis / Celery / PostgreSQL 依赖
@@ -118,6 +126,13 @@ backend/data/resumes/
 ## 10. 岗位数据抓取（可选）
 
 内置牛客 / Boss 直聘的 JD 抓取能力，数据写入 `backend/data/jd_platform.db` 的 `jds` 表。
+
+**网页端（「在招岗位」页）** 可以直接用：
+
+- 右上角**「抓取最新岗位」** → 走牛客公开接口，几秒入库 60 条；输入框里有关键词时会带上该关键词检索
+- **筛选栏**：关键词（岗位/公司/城市模糊匹配）、城市、学历、薪资区间、来源、排序、只看有薪资
+- 岗位卡片支持**查看详情**（含职责 / 要求 / 原始 JD 全文）、**重新解析**、打开原岗位、删除
+- 右侧可**粘贴 JD 文本**做结构化，或提交单个职位 URL 抓取
 
 ### 10.1 批量抓取
 
@@ -140,17 +155,26 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder --limit
 | `--limit N` | 目标总条数（默认 100）；超过 300 需加 `--yes` |
 | `--source nowcoder \| boss \| all` | 抓取来源 |
 | `--nowcoder-mode api \| dom` | 牛客抓取方式；`api`（默认）走官方接口，`dom` 逐页渲染 |
-| `--nowcoder-recruit-type` | 牛客招聘类型：数字、逗号分隔（如 `1,2,4`）、或 `all`（全量合并去重） |
+| `--nowcoder-scope school \| full` | `school`=按招聘类型（去重约 450 条）；`full`=分类+关键词+多端点（**实测 4803 条**） |
+| `--nowcoder-recruit-type` | 牛客招聘类型：数字、逗号分隔（如 `1,2`）、或 `all`（0/1/2/3 合并去重） |
 | `--delay` | 请求间隔秒数（默认 1.5），**请勿设为 0** |
 | `--structure` | 抓完后额外跑一次 LLM 结构化（默认关闭） |
 | `--user-data-dir` / `--storage-state` | 复用已登录会话（Boss 需要） |
 
-全量抓取（6 个招聘类型合并去重，实测得到 447 条唯一职位）：
+**全量抓取（推荐）**——走 `square-search` 的关键词检索，实测单次拿到 **4803 条去重职位**：
 
 ```bat
 backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder ^
-  --nowcoder-recruit-type all --limit 3000 --yes
+  --nowcoder-scope full --limit 6000 --yes
 ```
+
+> **为什么需要关键词检索？**
+> `recruitType` 只有 `0/1/2/3` 返回不同数据（去重 447 条），填 `4~30` 都会回落到
+> 与 `1` 相同的 200 条。真正能扩开数据量的是接口的 `query` 关键词参数
+> ——26 个关键词就把去重总量从 447 推到 2581。`--nowcoder-scope full` 会用
+> 107 个关键词种子逐个检索，并叠加 `/u/job/search`、`/u/job/list` 两个列表端点，
+> 连续 15 个关键词无新增时自动停止。实测耗时约 3.5 分钟、250 次低频请求
+> （默认 0.35s 间隔），得到 **4803 条唯一职位**。
 
 > **薪资单位说明**：牛客有两种薪资口径，由 `salaryType` 区分（实测 100% 对应）——
 > `2` 为月薪（K/月），`1` 为日薪（元/天）。`salary_min/salary_max` 两列在系统里
