@@ -2,6 +2,30 @@ import type { ReactNode } from "react";
 import { ApiError } from "./api";
 import { AlertCircle, CheckCircle2, Clock3, LoaderCircle } from "lucide-react";
 
+/** 统一的页面头部：各页共用同一套视觉，避免各写各的。 */
+export function PageHero({
+  eyebrow,
+  title,
+  desc,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  desc?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="rounded-3xl bg-[#e4f4ef] border border-brand-100 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-end gap-6">
+      <div className="flex-1">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900 mb-2">{title}</h1>
+        {desc && <div className="text-slate-600 max-w-xl leading-6">{desc}</div>}
+      </div>
+      {children && <div className="shrink-0">{children}</div>}
+    </section>
+  );
+}
+
 export function StatusBadge({ status }: { status: string }) {
   const cls =
     status === "COMPLETED"

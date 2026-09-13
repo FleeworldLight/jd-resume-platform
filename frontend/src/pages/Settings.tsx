@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { LlmProvider } from "../types";
-import { Card, ErrorBanner } from "../components";
+import { Card, ErrorBanner, PageHero } from "../components";
 
 const PROVIDER_TYPES = [
   { value: "openai", label: "OpenAI" },
@@ -97,6 +97,18 @@ export default function Settings() {
   return (
     <div className="space-y-4">
       <ErrorBanner error={error} />
+
+      <PageHero
+        eyebrow="MODEL PROVIDERS"
+        title="模型管理"
+        desc={
+          <>
+            当前默认 provider 是 <b>mock</b>（离线），JD 结构化与定制化都用本地规则兜底，照样能用。
+            在这里添加一个真实 Provider（OpenAI / Anthropic）并设为默认后，会自动切换为语义级分析。
+          </>
+        }
+      />
+
       {info && (
         <div className="card border-blue-200 bg-blue-50 text-blue-700 text-sm">
           {info}

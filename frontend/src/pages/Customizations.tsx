@@ -7,7 +7,7 @@ import type {
   PageResp,
   Resume,
 } from "../types";
-import { Card, ErrorBanner, StatusBadge } from "../components";
+import { Card, ErrorBanner, PageHero, StatusBadge } from "../components";
 
 /** 可用于定制化的 JD 状态：PARSED 已抽好字段，COMPLETED 还多跑了一遍结构化 */
 const USABLE_JD_STATUS = ["COMPLETED", "PARSED"];
@@ -129,6 +129,18 @@ export default function Customizations() {
   return (
     <div className="space-y-4">
       <ErrorBanner error={error} />
+
+      <PageHero
+        eyebrow="TAILORED APPLICATION"
+        title="定制化"
+        desc={
+          <>
+            选一条在招岗位 + 一份基础简历，流水线会跑：
+            <b> 召回评估 → 差距分析 → 定制简历 → 面试押题</b>。
+            当前未配置真实模型时用本地规则产出（秒级），结果会明确标注，不会编造你的经历。
+          </>
+        }
+      />
 
       <Card title="发起定制化">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

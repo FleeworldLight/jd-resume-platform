@@ -16,7 +16,9 @@
 - `frontend/`：React + Vite 前端
 - `start.bat`：Windows 双击启动脚本
 - `backend/.env.example`：环境变量示例（应用实际读取的是 `backend/.env`）
-- `docs/`：设计文档
+- `docs/`：设计文档（**先看 [docs/README.md](docs/README.md) 的状态索引**，部分文档写于旧架构阶段）
+- `scripts/`：抓取 / 校验 / 去重脚本（用法见 [scripts/README.md](scripts/README.md)）
+- `DEVELOPMENT_LOG.md`：每一轮改动、踩坑与验证结论（最详实的"为什么这么写"）
 
 ## 3. 一键启动（Windows）
 

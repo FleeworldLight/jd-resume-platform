@@ -1,19 +1,61 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api";
-import type { HealthData } from "../types";
+import type {
+  Customization,
+  HealthData,
+  JdFacets,
+  LlmProvider,
+  PageResp,
+  Resume,
+} from "../types";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, BriefcaseBusiness, FileText, Server, Sparkles } from "lucide-react";
+import {
+  ArrowUpRight, BriefcaseBusiness, FileText, Server, Sparkles,
+} from "lucide-react";
 import { Link } from "react-router-dom";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
+
+interface LibraryStats {
+  resumes: number;
+  jobs: number;
+  jobsWithSalary: number;
+  companies: number;
+  customizations: number;
+  customizationsDone: number;
+  providers: number;
+}
 
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthData | null>(null);
+  const [stats, setStats] = useState<LibraryStats | null>(null);
   const [error, setError] = useState<string>("");
 
   useEffect(() => {
     api
       .get<HealthData>("/health")
       .then(setHealth)
+      .catch((e: ApiError) => setError(e.message));
+
+    // 资料库统计：全部来自本地数据库的真实计数
+    Promise.all([
+      api.get<PageResp<Resume>>("/api/resumes?page_size=1"),
+      api.get<JdFacets>("/api/jds/facets"),
+      api.get<PageResp<Customization>>("/api/customizations?page_size=1"),
+      api.get<PageResp<Customization>>(
+        "/api/customizations?status=COMPLETED&page_size=1",
+      ),
+      api.get<LlmProvider[]>("/api/llm-providers"),
+    ])
+      .then(([resumes, facets, customs, customsDone, providers]) => {
+        setStats({
+          resumes: resumes.total,
+          jobs: facets.total,
+          jobsWithSalary: facets.with_salary,
+          companies: facets.companies,
+          customizations: customs.total,
+          customizationsDone: customsDone.total,
+          providers: providers.length,
+        });
+      })
       .catch((e: ApiError) => setError(e.message));
   }, []);
 
@@ -24,11 +66,11 @@ export default function Dashboard() {
         <div className="relative max-w-2xl">
           <div className="inline-flex items-center gap-2 text-brand-300 text-sm font-semibold mb-4"><Sparkles size={16} /> LOCAL-FIRST CAREER WORKSPACE</div>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">把每一次投递，<span className="text-brand-300">变成更好的版本。</span></h1>
-          <p className="text-slate-300 leading-7">集中管理简历与职位，快速看到匹配差距，再生成更贴合目标岗位的求职材料。</p>
+          <p className="text-slate-300 leading-7">集中管理简历与岗位，先看清匹配差距，再生成更贴合目标岗位的求职材料。数据全部存在本地 SQLite。</p>
         </div>
       </motion.section>
 
-      <AnimatePresence>{error && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="card border-red-200 bg-red-50 text-red-700">后端未连通：{error}。请确认 backend 已起在 :8000。</motion.div>}</AnimatePresence>
+      <AnimatePresence>{error && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="card border-red-200 bg-red-50 text-red-700">后端未连通：{error}。请双击项目根目录的 start.bat 启动。</motion.div>}</AnimatePresence>
 
       {health && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -44,22 +86,48 @@ export default function Dashboard() {
           <div className="grid sm:grid-cols-2 gap-4">
             <QuickLink to="/resumes" title="简历管理" desc="上传 → 自动拆解 → 在线编辑 → 导出下载" icon={FileText} number="01" />
             <QuickLink to="/jds" title="在招岗位" desc="抓取 / 筛选岗位，也可粘贴 JD 结构化" icon={BriefcaseBusiness} number="02" />
-            <QuickLink to="/customizations" title="发起定制化" desc="差距分析与面试押题" icon={Sparkles} number="03" />
+            <QuickLink to="/customizations" title="定制化" desc="差距分析 · 定制简历 · 面试押题" icon={Sparkles} number="03" />
             <QuickLink to="/settings" title="模型管理" desc="配置默认 LLM Provider" icon={Server} number="04" />
           </div>
         </section>
-        <section className="card min-h-56">
-          <p className="eyebrow">ACTIVITY</p><h2 className="text-xl font-bold mb-1">工作流概览</h2><p className="text-sm text-slate-500 mb-4">你的求职资料准备节奏</p>
-          <ResponsiveContainer width="100%" height={125}><AreaChart data={[{ day: "一", value: 2 }, { day: "二", value: 4 }, { day: "三", value: 3 }, { day: "四", value: 6 }, { day: "五", value: 5 }, { day: "六", value: 8 }, { day: "日", value: 7 }]}><defs><linearGradient id="activity" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#16a085" stopOpacity={0.35} /><stop offset="100%" stopColor="#16a085" stopOpacity={0} /></linearGradient></defs><XAxis dataKey="day" tickLine={false} axisLine={false} tick={{ fill: "#94a3b8", fontSize: 11 }} /><Tooltip /><Area type="monotone" dataKey="value" stroke="#16a085" fill="url(#activity)" strokeWidth={3} /></AreaChart></ResponsiveContainer>
+
+        <section className="card">
+          <p className="eyebrow">LIBRARY</p>
+          <h2 className="text-xl font-bold mb-1">资料库</h2>
+          <p className="text-sm text-slate-500 mb-4">本地数据库里的真实数量</p>
+          {!stats && <p className="text-sm text-slate-400">加载中…</p>}
+          {stats && (
+            <div className="grid grid-cols-2 gap-3">
+              <MiniStat icon={FileText} label="简历" value={`${stats.resumes} 份`} hint="已上传解析" />
+              <MiniStat
+                icon={BriefcaseBusiness}
+                label="在招岗位"
+                value={`${stats.jobs} 条`}
+                hint={`${stats.jobsWithSalary} 条有薪资`}
+              />
+              <MiniStat
+                icon={Sparkles}
+                label="定制化"
+                value={`${stats.customizationsDone} / ${stats.customizations}`}
+                hint="已完成 / 全部"
+              />
+              <MiniStat
+                icon={Server}
+                label="模型"
+                value={`${stats.providers} 个`}
+                hint={stats.providers > 0 ? "含 mock" : "未配置"}
+              />
+            </div>
+          )}
         </section>
       </div>
 
       <section className="border-t pt-6"><p className="eyebrow">GET STARTED</p><h2 className="text-xl font-bold mb-3">推荐使用顺序</h2><ol className="grid md:grid-cols-5 gap-3 text-sm text-slate-600">
-        <li>在「模型管理」新增一个 Provider（API Key 必填）并设为默认</li>
-        <li>「简历管理」上传一份基础简历 → 自动拆解为可编辑文本 → 需要时直接改并导出</li>
-        <li>「在招岗位」抓取或筛选岗位，也可粘贴 JD 文本 → 自动结构化出字段</li>
-        <li>「定制化」选 (JD, 简历) 发起 → 轮询到 COMPLETED</li>
-        <li>点详情查看 差距 / 定制 / 押题 / 召回指标，并导出 PDF</li>
+        <li>「模型管理」可以先用默认 mock——离线可用；想要语义级分析再配真实 Key</li>
+        <li>「简历管理」上传简历 → 自动拆解成可编辑文本 → 改完直接导出</li>
+        <li>「在招岗位」抓取或筛选岗位，也可以粘贴 JD 文本 → 自动结构化</li>
+        <li>「定制化」搜索选一条岗位 + 选简历 → 发起，得到差距分析与押题</li>
+        <li>在报告里看 匹配度 / 缺失技能 / 定制简历 / 押题，并导出 PDF</li>
       </ol></section>
     </div>
   );
@@ -72,6 +140,29 @@ function Stat({ label, value, ok }: { label: string; value: string; ok: boolean 
       <div className={`text-xl font-bold ${ok ? "text-brand-700" : "text-red-500"}`}>
         {value}
       </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  icon: Icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: typeof FileText;
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-xl border bg-slate-50/70 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-xs text-slate-500">
+        <Icon size={13} className="text-brand-600" />
+        {label}
+      </div>
+      <div className="text-lg font-bold text-slate-800 leading-6 mt-0.5">{value}</div>
+      {hint && <div className="text-[11px] text-slate-400">{hint}</div>}
     </div>
   );
 }

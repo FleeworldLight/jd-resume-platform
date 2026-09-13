@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { PageResp, Resume, ResumeDetail, ResumeStatus } from "../types";
-import { Card, ErrorBanner, StatusBadge } from "../components";
+import { Card, ErrorBanner, PageHero, StatusBadge } from "../components";
 import {
   CheckCircle2,
   Download,
@@ -200,6 +200,11 @@ export default function Resumes() {
 
   return (
     <div className="space-y-4">
+      <PageHero
+        eyebrow="RESUME STUDIO"
+        title="简历管理"
+        desc="上传 → 自动拆解为可编辑文本 → 在线编辑 → 导出 PDF / DOCX / TXT。支持点击选择或直接把文件拖进上传框。"
+      />
       {/* ---------- 流程引导 ---------- */}
       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
         <div className="flex items-start gap-2 text-sm text-slate-600">

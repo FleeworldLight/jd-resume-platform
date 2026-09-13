@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api";
 import type { Jd, JdCrawlSummary, JdFacets, JdStatus, PageResp } from "../types";
-import { Card, ErrorBanner, StatusBadge } from "../components";
+import { Card, ErrorBanner, PageHero, StatusBadge } from "../components";
 import {
   BriefcaseBusiness, Building2, ChevronLeft, ChevronRight, ExternalLink,
   Filter, GraduationCap, MapPin, RefreshCw, RotateCcw, Search, Sparkles,
@@ -255,26 +255,21 @@ export default function Jds() {
     <div className="space-y-6">
       <ErrorBanner error={error} />
 
-      <section className="rounded-3xl bg-[#e4f4ef] border border-brand-100 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-end gap-6">
-        <div className="flex-1">
-          <p className="eyebrow">OPEN POSITIONS</p>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900 mb-2">在招岗位</h1>
-          <p className="text-slate-600 max-w-xl">
-            抓取或粘贴岗位，按关键词 / 城市 / 学历 / 薪资筛选，快速找到值得投递的机会。
-          </p>
+      <PageHero eyebrow="OPEN POSITIONS" title="在招岗位" desc="抓取或粘贴岗位，按关键词 / 城市 / 学历 / 薪资筛选，快速找到值得投递的机会。">
+        <div className="flex flex-col items-start lg:items-end gap-3">
           {facets && (
-            <div className="flex flex-wrap gap-x-6 gap-y-1 mt-4 text-sm text-slate-600">
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600">
               <span>共 <b className="text-slate-900">{facets.total}</b> 条岗位</span>
               <span><b className="text-slate-900">{facets.with_salary}</b> 条有薪资</span>
               <span><b className="text-slate-900">{facets.companies}</b> 家公司</span>
             </div>
           )}
+          <button className="btn-primary" onClick={crawlNowcoder} disabled={crawling}>
+            <RefreshCw size={17} className={crawling ? "animate-spin" : ""} />
+            {crawling ? "正在抓取…" : "抓取最新岗位"}
+          </button>
         </div>
-        <button className="btn-primary shrink-0" onClick={crawlNowcoder} disabled={crawling}>
-          <RefreshCw size={17} className={crawling ? "animate-spin" : ""} />
-          {crawling ? "正在抓取…" : "抓取最新岗位"}
-        </button>
-      </section>
+      </PageHero>
 
       {notice && (
         <div className="card border-brand-200 bg-brand-50/70 text-brand-800 text-sm py-3">
