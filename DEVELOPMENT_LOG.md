@@ -410,7 +410,7 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source nowcoder ^
 
 1. **后端一直是正常的。** 实测完整链路：
    上传 TXT → `parse_status=COMPLETED`（提取 268 字）→ 详情 → 下载原件 → 列表，全部 HTTP 200。
-   用户自己的 `陈晓阳 - 简历.pdf` 同样解析成功（1934 字），内容完整。
+   用户自己的简历 PDF 同样解析成功（1934 字），内容完整。
 2. **前端也没有报错。** Playwright 打开真实浏览器：零控制台错误、零失败请求、
    上传成功、列表正常渲染。
 3. **「没法浏览文件」的直接原因**：之前把服务放在**内置预览面板**里展示，

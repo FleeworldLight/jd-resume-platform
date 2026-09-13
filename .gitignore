@@ -41,3 +41,8 @@ frontend/.vite/
 # Keep resume folder structure
 !data/.gitkeep
 !data/resumes/.gitkeep
+
+# 第三方参考项目副本（97M，与本项目无关，永不提交）
+# 注意：该目录仅作参考，请勿修改其中内容
+Lujie-Careerkit-main/
+Lujie-Careerkit-main.zip
