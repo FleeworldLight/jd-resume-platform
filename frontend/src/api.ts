@@ -1,7 +1,11 @@
 // fetch wrapper: 拆 Result 包，错误抛 ApiError
 import type { Result } from "./types";
 
-const BASE = ""; // dev 走 vite proxy，prod 走 nginx 同源
+// 后端地址：
+//   - 本地开发：留空 → 走 vite proxy（/api、/health 代理到 127.0.0.1:8000）
+//   - 部署到 GitHub Pages：必须填绝对 URL（跨域），由构建时注入
+//       VITE_API_BASE=https://your-backend.example.com npm run build
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export class ApiError extends Error {
   code: number;

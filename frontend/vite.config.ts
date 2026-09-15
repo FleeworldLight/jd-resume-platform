@@ -1,7 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// 子路径部署（GitHub Pages 的 https://<user>.github.io/<repo>/）需要设 base：
+//   VITE_BASE=/jd-resume-platform/ npm run build
+// 本地开发留空即可（默认 "/"）。
+const base = process.env.VITE_BASE || "/";
+
 export default defineConfig({
+  base,
   plugins: [react()],
   server: {
     host: "0.0.0.0",
@@ -19,6 +25,7 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    // 公开仓库不必把 TypeScript 源码一起发出去
+    sourcemap: false,
   },
 });

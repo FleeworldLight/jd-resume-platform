@@ -2,6 +2,13 @@
 
 这是一个本地优先的简历定制平台：后端用 FastAPI + SQLite，LLM 默认走 mock provider，前端直接用 Vite 启动，不依赖 Docker、Redis、Celery、Postgres 或外部服务。
 
+> **在线演示**：https://fleeworldlight.github.io/jd-resume-platform/
+> 演示站用的是脱敏样例数据（虚拟简历 + 真实岗位），并在 `DEMO_MODE` 下关闭了
+> 上传 / 删除 / 抓取等写操作。完整功能请按下面的步骤本地运行。
+>
+> **不配任何 API Key 也能跑**：默认 mock provider 下，JD 结构化与定制化三步
+> 都有本地规则兜底（见第 8 节），离线可用。
+
 ## 1. 目标
 
 - Windows 本地双击打开即可运行
@@ -277,10 +284,94 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss ^
 - **Boss 直聘**：见 10.4，需自备登录态且存在条款风险。
 - 请遵守目标站点的 robots 与服务条款，仅用于个人求职分析，保持低频访问。
 
-## 11. 说明
+## 11. 部署到线上（公开演示）
+
+线上形态是**前端静态站 + 独立后端**两部分：
+
+| 部分 | 托管 | 说明 |
+|---|---|---|
+| 前端 | **GitHub Pages** | 由 `.github/workflows/deploy.yml` 自动构建发布 |
+| 后端 | 免费容器平台（Hugging Face Spaces / Render 等） | 用 `backend/Dockerfile`；需要长驻进程，Pages 跑不了 Python |
+
+### 11.1 前端（GitHub Pages）
+
+1. 仓库 **Settings → Pages → Source** 选 **GitHub Actions**
+2. **Settings → Secrets and variables → Actions → Variables** 添加 `VITE_API_BASE`
+   = 后端地址（如 `https://xxx.onrender.com`，**不要带结尾斜杠**）
+3. push 到 `main` 即自动构建发布，地址形如 `https://<用户名>.github.io/<仓库名>/`
+
+构建时注入两个变量（见 `.github/workflows/deploy.yml`）：
+
+- `VITE_BASE=/<仓库名>/` —— 子路径部署必需，否则静态资源全部 404
+- `VITE_API_BASE` —— 跨域必须用绝对 URL
+
+深链接（例如直接刷新 `/jds`）靠构建后把 `index.html` 复制成 `404.html` 兜底。
+若仓库变量没配，工作流会打印 warning，前端会显示"后端暂时连不上"并给出重试按钮。
+
+### 11.2 后端
+
+用 `backend/Dockerfile` 构建。
+
+- **Hugging Face Spaces**：新建 Docker Space，把 `backend/` 里的内容推到该 Space 仓库的**根目录**（HF 要求 Dockerfile 在仓库根）
+- **Render**：Root Directory 填 `backend`，它会用这个 Dockerfile
+
+需要配置的环境变量：
+
+| 变量 | 值 | 说明 |
+|---|---|---|
+| `SECRET_KEY` | 32+ 字节随机串 | `python -c "import secrets;print(secrets.token_urlsafe(32))"` |
+| `CORS_ORIGINS` | `["https://<用户名>.github.io"]` | **JSON 数组**写法；origin 只到 host，**不带路径** |
+| `DEMO_MODE` | `true` | 打开演示守卫 |
+| `CRAWLER_ENABLED` | `0` | 云端不提供逐页渲染抓取 |
+| `LLM_DEFAULT_PROVIDER` | `mock` | 离线规则兜底，演示无需 API Key |
+
+> 镜像里**不安装 Playwright 浏览器**：省内存，且云端 IP 抓岗位本就会被风控。
+> 走 httpx 的公开接口抓取仍然可用。
+
+### 11.3 数据为什么不会丢
+
+免费平台的磁盘是临时的（重建/重启即清空）。仓库里带了脱敏种子库
+`backend/seed/demo_seed.db`（4800+ 条岗位），`app/db/init_db.py` 在数据文件不存在时
+**直接复制它** —— 冷启动即还原，比逐条 INSERT 快得多。
+
+重新生成种子库（内置 PII 闸门，命中敏感词就不产出）：
+
+```bat
+backend\.venv\Scripts\python.exe scripts\export_demo_seed.py
+```
+
+### 11.4 演示模式做了什么
+
+`DEMO_MODE=true` 时，非 GET 请求**只放行"纯计算"类操作**，其余返回 403：
+
+| 放行 | 拦截 |
+|---|---|
+| 粘贴 JD → 结构化 | 所有 `DELETE` |
+| 发起定制化 / 重试 | 上传简历（公开站绝不能允许匿名上传文件） |
+| 按已抓取的原文重新解析 | 抓取岗位、改模型配置 |
+
+前端读 `/health` 的 `demo_mode` 字段，在顶部显示黄色横幅告知访客哪些操作被关闭。
+
+## 12. 说明
 
 - 当前版本已去掉 Docker / Redis / Celery / PostgreSQL 依赖
 - 爬虫保留并默认启用，适合本地抓取 JD
 - API 仍兼容统一 `Result` 响应格式，前后端交互保持一致
 - 默认 `mock` provider 下，JD 结构化与定制化三步都有**本地规则兜底**，
   离线也能跑出可用结果；结果会标注 `extract_mode` 并在页面上提示
+
+## 13. 参考与致谢
+
+产品设计阶段参考了一个同类开源项目 **[LuJie CareerKit](https://github.com/Chozzc/Lujie-Careerkit)**（Apache-2.0，
+中文名「录阶」）的思路，特此致谢。**仅借鉴设计理念，未复制其代码**——两个项目的技术栈与
+架构都不同（对方是 Next.js + Prisma，本项目是 FastAPI + SQLite）。
+
+明确借鉴的点记录在 `ROADMAP.md` 末尾，主要包括：
+
+- 简历**多版本**机制（生成新版本而非覆盖原稿）
+- AI 改动的**逐条审阅**（before/after + 逐项确认后才写回）
+- 投递追踪的**阶段枚举与指标口径**（活跃流程、跟进日期默认 +7 天）
+- 发给 LLM 前**剥离联系方式**，并在提示词里声明"已移除、不得诊断其缺失"
+
+也有明确**不**照搬的地方（例如它的前端截图拼 PDF 方案，本项目用后端
+reportlab + 内置中文字体，跨机器一致性更好），理由同样记在 `ROADMAP.md`。

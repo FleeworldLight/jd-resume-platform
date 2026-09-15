@@ -1,0 +1,22 @@
+# 构建镜像时排除（构建上下文 = backend/）
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 本地运行数据：不要打进镜像！容器里会用 seed/demo_seed.db 还原
+data/
+
+# 开发/测试文件
+tests/
+*.log
+.env
+.env.local
+
+.git/
+.gitignore

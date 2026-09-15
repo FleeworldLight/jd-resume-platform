@@ -10,7 +10,7 @@ import type {
 } from "../types";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowUpRight, BriefcaseBusiness, FileText, Server, Sparkles,
+  ArrowUpRight, BriefcaseBusiness, FileText, RefreshCw, Server, Sparkles,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -28,23 +28,27 @@ export default function Dashboard() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [error, setError] = useState<string>("");
+  const [retry, setRetry] = useState(0);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
+    setRetrying(true);
+    setError("");
+
     api
       .get<HealthData>("/health")
-      .then(setHealth)
-      .catch((e: ApiError) => setError(e.message));
-
-    // 资料库统计：全部来自本地数据库的真实计数
-    Promise.all([
-      api.get<PageResp<Resume>>("/api/resumes?page_size=1"),
-      api.get<JdFacets>("/api/jds/facets"),
-      api.get<PageResp<Customization>>("/api/customizations?page_size=1"),
-      api.get<PageResp<Customization>>(
-        "/api/customizations?status=COMPLETED&page_size=1",
-      ),
-      api.get<LlmProvider[]>("/api/llm-providers"),
-    ])
+      .then((h) => {
+        setHealth(h);
+        return Promise.all([
+          api.get<PageResp<Resume>>("/api/resumes?page_size=1"),
+          api.get<JdFacets>("/api/jds/facets"),
+          api.get<PageResp<Customization>>("/api/customizations?page_size=1"),
+          api.get<PageResp<Customization>>(
+            "/api/customizations?status=COMPLETED&page_size=1",
+          ),
+          api.get<LlmProvider[]>("/api/llm-providers"),
+        ]);
+      })
       .then(([resumes, facets, customs, customsDone, providers]) => {
         setStats({
           resumes: resumes.total,
@@ -56,8 +60,9 @@ export default function Dashboard() {
           providers: providers.length,
         });
       })
-      .catch((e: ApiError) => setError(e.message));
-  }, []);
+      .catch((e: ApiError) => setError(e.message))
+      .finally(() => setRetrying(false));
+  }, [retry]);
 
   return (
     <div className="space-y-7">
@@ -70,7 +75,34 @@ export default function Dashboard() {
         </div>
       </motion.section>
 
-      <AnimatePresence>{error && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="card border-red-200 bg-red-50 text-red-700">后端未连通：{error}。请双击项目根目录的 start.bat 启动。</motion.div>}</AnimatePresence>
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="card border-amber-200 bg-amber-50 text-amber-900"
+          >
+            <div className="font-semibold mb-1">后端暂时连不上（{error}）</div>
+            <p className="text-sm leading-6">
+              如果这是线上演示站：免费实例闲置后会休眠，
+              <b>首次请求需要 30~60 秒唤醒</b>，点下面的按钮多试几次即可。
+            </p>
+            <p className="text-sm leading-6">
+              如果这是本地运行：请确认后端已启动（双击项目根目录的 <code>start.bat</code>，
+              或 <code>uvicorn app.main:app --port 8000</code>）。
+            </p>
+            <button
+              className="btn-primary mt-3"
+              onClick={() => setRetry((n) => n + 1)}
+              disabled={retrying}
+            >
+              <RefreshCw size={15} className={retrying ? "animate-spin" : ""} />
+              {retrying ? "正在重连…" : "重试连接"}
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {health && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

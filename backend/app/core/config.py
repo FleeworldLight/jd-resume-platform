@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
 
+    # 演示模式：公开部署时设为 true
+    # 非 GET 请求只放行「纯计算」类操作（粘贴 JD 结构化、发起定制化、重新解析），
+    # 其余写操作（上传文件、删除、抓取、改 Provider）一律 403，详见 main.py
+    demo_mode: bool = False
+
     # 数据库（默认 SQLite：本地双击 start.bat 即可，无需外部服务）
     database_url: str = "sqlite+aiosqlite:///./data/jd_platform.db"
     database_sync_url: str = "sqlite:///./data/jd_platform.db"

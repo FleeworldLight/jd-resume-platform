@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import re
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -97,6 +98,41 @@ async def trace_middleware(request: Request, call_next):
     return response
 
 
+# ---------- 中间件：演示模式守卫 ----------
+# 公开演示站不能让人删库、上传文件、刷抓取接口，但又希望访客能体验核心能力。
+# 所以采用**白名单**：只有"纯计算"的写操作放行，其余非 GET 一律 403。
+_DEMO_ALLOWED_WRITES: list[tuple[str, str]] = [
+    ("POST", r"^/api/jds/text$"),                  # 粘贴 JD → 规则结构化
+    ("POST", r"^/api/jds/\d+/reparse$"),           # 按已抓取的原文重新解析
+    ("POST", r"^/api/customizations$"),            # 发起定制化（生成报告）
+    ("POST", r"^/api/customizations/\d+/retry$"),  # 重试失败的定制化
+]
+
+
+@app.middleware("http")
+async def demo_guard_middleware(request: Request, call_next):
+    if settings.demo_mode and request.method not in ("GET", "HEAD", "OPTIONS"):
+        path = request.url.path
+        allowed = any(
+            request.method == m and re.match(pattern, path)
+            for m, pattern in _DEMO_ALLOWED_WRITES
+        )
+        if not allowed:
+            logger.info("demo.blocked", method=request.method, path=path)
+            return JSONResponse(
+                status_code=403,
+                content=Result.fail(
+                    code=ErrorCode.FORBIDDEN,
+                    message=(
+                        "这是在线演示站点，为避免数据被破坏，"
+                        "抓取岗位 / 上传简历 / 删除 / 修改模型配置等写操作已关闭。"
+                        "完整功能请克隆仓库本地运行（见 README）。"
+                    ),
+                ).model_dump(),
+            )
+    return await call_next(request)
+
+
 # ---------- 路由 ----------
 app.include_router(resumes_router)
 app.include_router(jds_router)
@@ -122,6 +158,9 @@ async def health() -> Result[dict[str, Any]]:
             "app": settings.app_name,
             "version": settings.app_version,
             "db": db_ok,
+            # 前端据此显示"演示站"横幅、决定哪些按钮要置灰
+            "demo_mode": settings.demo_mode,
+            "crawler_enabled": settings.crawler_enabled,
         }
     )
 
