@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ApiError } from "./api";
 import { AlertCircle, CheckCircle2, Clock3, LoaderCircle } from "lucide-react";
 
-/** 统一的页面头部：各页共用同一套视觉，避免各写各的。 */
+/** 统一的页面头部：小的字距标签 + 衬线标题 + 细分割线，克制、不抢内容。 */
 export function PageHero({
   eyebrow,
   title,
@@ -15,13 +15,18 @@ export function PageHero({
   children?: ReactNode;
 }) {
   return (
-    <section className="rounded-3xl bg-[#e4f4ef] border border-brand-100 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-end gap-6">
-      <div className="flex-1">
-        <p className="eyebrow">{eyebrow}</p>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900 mb-2">{title}</h1>
-        {desc && <div className="text-slate-600 max-w-xl leading-6">{desc}</div>}
+    <section className="mb-7">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <p className="eyebrow">{eyebrow}</p>
+          <h1 className="page-title">{title}</h1>
+          {desc && (
+            <div className="mt-2.5 max-w-2xl text-sm leading-6 text-slate-600">{desc}</div>
+          )}
+        </div>
+        {children && <div className="shrink-0">{children}</div>}
       </div>
-      {children && <div className="shrink-0">{children}</div>}
+      <div className="mt-5 h-px bg-line" />
     </section>
   );
 }

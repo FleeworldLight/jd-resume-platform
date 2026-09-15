@@ -6,18 +6,28 @@
   --color-brand-500: #16a085;
   --color-brand-600: #10866e;
   --color-brand-700: #0b6958;
-  --font-sans: "DM Sans", "Microsoft YaHei", sans-serif;
+
+  --font-sans: "DM Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
+  /* 标题用衬线体 —— 参考项目里"编辑感/高级感"的主要来源之一 */
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", Georgia, serif;
+
+  /* 表面层级：靠明度差做分区，而不是靠到处画描边 */
+  --color-surface: #ffffff;
+  --color-surface-low: #f6f7f6;
+  --color-surface-mid: #eff2f1;
+  --color-surface-high: #e8edeb;
+  --color-line: #e6ebe9;
 }
 
 @layer base {
   body {
     @apply text-slate-800 antialiased;
-    background: #f5f7f6;
-    background-image: radial-gradient(#d7e6e0 0.7px, transparent 0.7px);
-    background-size: 18px 18px;
+    background: var(--color-surface-low);
   }
 
-  * { border-color: #dce7e2; }
+  * {
+    border-color: var(--color-line);
+  }
 }
 
 @layer components {
@@ -33,8 +43,10 @@
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed bg-red-500 text-white hover:bg-red-600;
   }
+
+  /* 卡片：用 ring 代替 border，边缘更柔和；阴影也更克制 */
   .card {
-    @apply bg-white rounded-2xl shadow-[0_12px_35px_rgba(25,64,52,0.06)] border p-5;
+    @apply bg-white rounded-xl p-5 ring-1 ring-black/[0.06] shadow-[0_1px_2px_rgba(16,40,34,0.04)];
   }
   .input {
     @apply w-full px-3.5 py-2.5 border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500;
@@ -58,5 +70,22 @@
     @apply inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-700;
   }
 
-  .eyebrow { @apply text-[11px] font-bold tracking-[0.18em] text-brand-600 mb-1; }
+  /* 小号大字距标签：分区标题统一用它 */
+  .eyebrow {
+    @apply text-[11px] font-bold tracking-[0.18em] text-brand-600 mb-1 uppercase;
+  }
+  /* 页面主标题：衬线 + 克制字重 */
+  .page-title {
+    @apply font-serif text-[28px] lg:text-[32px] font-semibold tracking-tight text-slate-900 leading-tight;
+  }
+  /* 侧栏导航项 */
+  .nav-item {
+    @apply flex h-10 items-center gap-3 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-slate-600 transition hover:bg-surface-mid hover:text-slate-900;
+  }
+  .nav-item-active {
+    @apply bg-white text-brand-700 ring-1 ring-line shadow-[0_1px_2px_rgba(16,40,34,0.05)];
+  }
+  .nav-group-title {
+    @apply px-3 text-[11px] font-semibold tracking-[0.14em] text-slate-400 uppercase;
+  }
 }

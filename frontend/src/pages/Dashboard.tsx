@@ -66,12 +66,12 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-7">
-      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-7 sm:p-10">
+      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="relative overflow-hidden rounded-2xl bg-slate-900 text-white p-7 sm:p-10">
         <div className="absolute right-[-4rem] top-[-5rem] h-64 w-64 rounded-full border-[35px] border-brand-500/20" />
         <div className="relative max-w-2xl">
-          <div className="inline-flex items-center gap-2 text-brand-300 text-sm font-semibold mb-4"><Sparkles size={16} /> LOCAL-FIRST CAREER WORKSPACE</div>
-          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">把每一次投递，<span className="text-brand-300">变成更好的版本。</span></h1>
-          <p className="text-slate-300 leading-7">集中管理简历与岗位，先看清匹配差距，再生成更贴合目标岗位的求职材料。数据全部存在本地 SQLite。</p>
+          <div className="mb-4 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300"><Sparkles size={14} /> Local-first career workspace</div>
+          <h1 className="mb-3 font-serif text-[30px] font-semibold leading-tight tracking-tight sm:text-[38px]">把每一次投递，<span className="text-brand-300">变成更好的版本。</span></h1>
+          <p className="text-sm leading-7 text-slate-300">集中管理简历与岗位，先看清匹配差距，再生成更贴合目标岗位的求职材料。数据全部存在本地 SQLite。</p>
         </div>
       </motion.section>
 
