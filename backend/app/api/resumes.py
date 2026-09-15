@@ -20,6 +20,8 @@ from app.schemas.resume import (
     ResumeStatusResponse,
     ResumeUpdateRequest,
 )
+from app.schemas.resume_content import ResumeContent
+from app.services.resume_content_service import content_to_text, text_to_content
 from app.services.resume_service import ResumeService
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
@@ -121,6 +123,37 @@ async def update_resume(
     """保存在线编辑后的简历全文（写入 `resume_text`，不覆盖上传的原文件）。"""
     resume = await service.update_text(resume_id, body.resume_text)
     return Result.ok(ResumeDetailResponse.model_validate(resume))
+
+
+@router.get("/{resume_id}/content", response_model=Result[ResumeContent])
+async def get_resume_content(
+    resume_id: int,
+    service: ResumeService = Depends(_service),
+) -> Result[ResumeContent]:
+    """把 `resume_text` 解析成结构化内容，供编辑器表单使用。
+
+    解析是「不丢内容」的：认不出的行进 `extras`、认不出的小节进 `custom_sections`，
+    保存时会原样写回。
+    """
+    resume = await service.get(resume_id)
+    return Result.ok(text_to_content(resume.resume_text or ""))
+
+
+@router.put("/{resume_id}/content", response_model=Result[ResumeContent])
+async def update_resume_content(
+    resume_id: int,
+    body: ResumeContent,
+    service: ResumeService = Depends(_service),
+) -> Result[ResumeContent]:
+    """保存结构化内容。
+
+    渲染回纯文本后写入 `resume_text`（**不覆盖上传的原文件**），
+    再把落库后的文本重新解析一遍返回 —— 前端用返回值刷新表单，
+    这样「用户看到的」与「实际存下来的」永远一致。
+    """
+    text = content_to_text(body)
+    await service.update_text(resume_id, text)
+    return Result.ok(text_to_content(text))
 
 
 @router.get("/{resume_id}/export")

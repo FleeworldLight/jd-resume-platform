@@ -18,6 +18,7 @@ import type {
   LlmProvider,
   PageResp,
   Resume,
+  ResumeContent,
   ResumeDetail,
 } from "./types";
 
@@ -58,6 +59,8 @@ interface JobsFile {
 interface ResumesFile {
   list: PageResp<Resume>;
   details: Record<string, ResumeDetail>;
+  /** 结构化内容（编辑器表单用）：id -> ResumeContent */
+  contents?: Record<string, ResumeContent>;
 }
 interface CustomsFile {
   list: PageResp<Customization>;
@@ -216,6 +219,17 @@ export async function demoRequest(path: string): Promise<unknown> {
       parse_error: r.parse_error ?? null,
       has_text: Boolean(r.resume_text),
     };
+  }
+
+  // 结构化内容（编辑器用）；注意要排在 /{id} 之前匹配更具体的路径
+  const resumeContent = rawPath.match(/^\/api\/resumes\/(\d+)\/content$/);
+  if (resumeContent) {
+    const { contents } = await loadResumes();
+    const c = contents?.[resumeContent[1]];
+    if (!c) {
+      throw new DemoUnsupported(`演示数据里没有简历 #${resumeContent[1]} 的结构化内容`);
+    }
+    return c;
   }
 
   const resumeDetail = rawPath.match(/^\/api\/resumes\/(\d+)$/);

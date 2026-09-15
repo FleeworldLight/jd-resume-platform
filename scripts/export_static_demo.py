@@ -128,12 +128,18 @@ async def main() -> int:
         facets = await get_json("/api/jds/facets")
         total_bytes += dump("facets.json", facets)
 
-        # 3. 简历（列表 + 详情）
+        # 3. 简历（列表 + 详情 + 结构化内容，编辑器表单要用最后一项）
         r_list = await get_json("/api/resumes?page_size=50")
         r_details = {}
+        r_contents = {}
         for item in r_list["items"]:
-            r_details[str(item["id"])] = await get_json(f"/api/resumes/{item['id']}")
-        total_bytes += dump("resumes.json", {"list": r_list, "details": r_details})
+            rid = item["id"]
+            r_details[str(rid)] = await get_json(f"/api/resumes/{rid}")
+            r_contents[str(rid)] = await get_json(f"/api/resumes/{rid}/content")
+        total_bytes += dump(
+            "resumes.json",
+            {"list": r_list, "details": r_details, "contents": r_contents},
+        )
 
         # 4. 定制化（列表 + 详情）
         c_list = await get_json("/api/customizations?page_size=50")

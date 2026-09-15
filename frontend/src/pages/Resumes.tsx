@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { PageResp, Resume, ResumeDetail, ResumeStatus } from "../types";
 import { Card, ErrorBanner, PageHero, StatusBadge } from "../components";
+import ResumeEditor from "../components/ResumeEditor";
 import {
   CheckCircle2,
   Download,
@@ -11,7 +12,6 @@ import {
   Loader2,
   Pencil,
   RefreshCw,
-  Save,
   Trash2,
   Upload,
   X,
@@ -35,13 +35,12 @@ export default function Resumes() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ---- 在线编辑状态 ----
+  // 编辑器的脏值/保存状态由 <ResumeEditor> 自己维护（它需要结构化内容来判断）
   const [editing, setEditing] = useState<ResumeDetail | null>(null);
-  const [draft, setDraft] = useState("");
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-
-  const dirty = editing !== null && draft !== (editing.resume_text ?? "");
+  // 改变它可强制编辑器重挂载（重新解析后需要重新拉取内容）
+  const [editorKey, setEditorKey] = useState(0);
 
   const reload = async () => {
     try {
@@ -104,7 +103,6 @@ export default function Resumes() {
     try {
       const detail = await api.get<ResumeDetail>(`/api/resumes/${id}`);
       setEditing(detail);
-      setDraft(detail.resume_text ?? "");
       window.setTimeout(() => {
         document.getElementById("resume-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 50);
@@ -116,29 +114,7 @@ export default function Resumes() {
   };
 
   const closeEditor = () => {
-    if (dirty && !confirm("有未保存的修改，确定关闭吗？")) return;
     setEditing(null);
-    setDraft("");
-  };
-
-  // ---- 保存 ----
-  const save = async () => {
-    if (!editing) return;
-    setError(null);
-    setSaving(true);
-    try {
-      const updated = await api.put<ResumeDetail>(`/api/resumes/${editing.id}`, {
-        resume_text: draft,
-      });
-      setEditing(updated);
-      setDraft(updated.resume_text ?? "");
-      setNotice("已保存。导出的 PDF / DOCX / TXT 都会使用这份编辑后的内容。");
-      await reload();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
-    }
   };
 
   // ---- 重新解析 ----
@@ -152,7 +128,8 @@ export default function Resumes() {
       if (editing?.id === id) {
         const detail = await api.get<ResumeDetail>(`/api/resumes/${id}`);
         setEditing(detail);
-        setDraft(detail.resume_text ?? "");
+        // 重新解析后要强制编辑器重新拉取结构化内容（用 key 触发重挂载）
+        setEditorKey((k) => k + 1);
       }
       setNotice("已重新解析。");
     } catch (e) {
@@ -293,18 +270,9 @@ export default function Resumes() {
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <StatusBadge status={editing.parse_status} />
               <span className="text-xs text-slate-500">
-                共 {(draft || "").length} 字 · {(draft || "").split("\n").length} 行
-                {dirty && <span className="ml-2 text-amber-600 font-medium">● 有未保存修改</span>}
+                结构化编辑：左侧改字段，右侧实时预览
               </span>
               <span className="ml-auto flex flex-wrap items-center gap-2">
-                <button
-                  onClick={save}
-                  disabled={saving || !dirty}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-                >
-                  {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-                  保存
-                </button>
                 <button
                   onClick={() => reparse(editing.id)}
                   disabled={busyId === editing.id}
@@ -333,23 +301,7 @@ export default function Resumes() {
               </span>
             </div>
 
-            <p className="mb-2 text-xs text-slate-500">
-              下面是解析出来的文本，直接在这里改；保存后导出会用这份内容。
-              {(!draft || draft.trim().length === 0) && (
-                <span className="text-amber-600">
-                  {" "}
-                  当前解析结果为空 —— 可以点「重新解析」，或者直接在这里手写。
-                </span>
-              )}
-            </p>
-
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              spellCheck={false}
-              placeholder="在这里编辑你的简历内容…"
-              className="w-full h-[520px] resize-y rounded-xl border border-slate-300 bg-white p-4 font-mono text-[13px] leading-relaxed text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15"
-            />
+            <ResumeEditor key={editorKey} resume={editing} onSaved={reload} />
           </Card>
         </div>
       )}

@@ -27,6 +27,61 @@ export interface ResumeDetail extends Resume {
   storage_path: string | null;
 }
 
+/** 结构化简历（编辑器表单的数据契约），与后端 app/schemas/resume_content.py 对应 */
+export interface ResumeBasics {
+  name: string;
+  phone: string;
+  email: string;
+  city: string;
+  age: string;
+  links: string[];
+}
+
+export interface ResumeProfile {
+  title: string;
+  tagline: string;
+  summary: string;
+  highlights: string[];
+}
+
+export interface ResumeItem {
+  title: string;
+  org: string;
+  role: string;
+  start: string;
+  end: string;
+  description: string;
+  highlights: string[];
+  tech_stack: string[];
+}
+
+export interface ResumeEducation {
+  school: string;
+  major: string;
+  degree: string;
+  start: string;
+  end: string;
+  highlights: string[];
+}
+
+export interface ResumeCustomSection {
+  title: string;
+  lines: string[];
+}
+
+export interface ResumeContent {
+  basics: ResumeBasics;
+  profile: ResumeProfile;
+  education: ResumeEducation[];
+  experiences: ResumeItem[];
+  projects: ResumeItem[];
+  skills: string[];
+  awards: string[];
+  extras: string[];
+  custom_sections: ResumeCustomSection[];
+  parse_note: string;
+}
+
 export interface ResumeStatus {
   id: number;
   parse_status: string;
