@@ -1,8 +1,10 @@
 name: Deploy frontend to GitHub Pages
 
-# 只部署前端（静态站点）。后端是独立的 FastAPI 服务，需另行部署到
-# 支持长驻进程的平台（Hugging Face Spaces / Render 等），
-# 并通过仓库变量 VITE_API_BASE 把地址注入到构建里。
+# 两种模式自动切换：
+#   ① 仓库变量 VITE_API_BASE 已配置 → 正常构建，请求真实后端
+#   ② 没配置                        → 走「纯静态演示」模式：
+#      前端读 public/demo-data/*.json（由 scripts/export_static_demo.py 预导出），
+#      不需要任何后端也能看完整界面。这样即使后端还没部署，Pages 也是可用的。
 
 on:
   push:
@@ -35,10 +37,15 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Warn if VITE_API_BASE is missing
+      - name: Decide build mode
+        id: mode
         run: |
-          if [ -z "${{ vars.VITE_API_BASE }}" ]; then
-            echo "::warning title=未配置后端地址::仓库变量 VITE_API_BASE 为空，构建出的前端将连不上后端（页面会提示后端未连通）。请在 Settings → Secrets and variables → Actions → Variables 里添加 VITE_API_BASE。"
+          if [ -n "${{ vars.VITE_API_BASE }}" ]; then
+            echo "static_demo=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=构建模式::连接真实后端 ${{ vars.VITE_API_BASE }}"
+          else
+            echo "static_demo=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=构建模式::未配置 VITE_API_BASE，回退到「纯静态演示」模式（读 demo-data/*.json，无后端）"
           fi
 
       - name: Install dependencies
@@ -50,8 +57,9 @@ jobs:
         env:
           # 子路径部署：https://<user>.github.io/<repo>/
           VITE_BASE: /${{ github.event.repository.name }}/
-          # 后端绝对地址（跨域必须绝对 URL）
+          # 后端绝对地址（跨域必须绝对 URL）；为空则走静态演示
           VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+          VITE_STATIC_DEMO: ${{ steps.mode.outputs.static_demo }}
         run: npm run build
 
       - name: SPA fallback (深链接回退)

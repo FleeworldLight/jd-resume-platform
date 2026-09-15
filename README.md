@@ -286,12 +286,20 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss ^
 
 ## 11. 部署到线上（公开演示）
 
-线上形态是**前端静态站 + 独立后端**两部分：
+部署**自动分两种模式**，由仓库变量 `VITE_API_BASE` 是否配置决定：
+
+| 模式 | 触发条件 | 效果 |
+|---|---|---|
+| **纯静态演示** | 没配 `VITE_API_BASE`（默认） | 前端读 `frontend/public/demo-data/*.json`，**不需要任何后端**。岗位可筛选/分页/看详情、简历可看、定制化报告可看；写操作会给出友好提示 |
+| **连接真实后端** | 配了 `VITE_API_BASE` | 全部功能可用（抓取、上传、跑新定制化…） |
+
+也就是说：**什么都不配、直接 push，Pages 上就已经是一个可用的演示站**。
+这样后端还没部署时也不会看到白屏。
 
 | 部分 | 托管 | 说明 |
 |---|---|---|
 | 前端 | **GitHub Pages** | 由 `.github/workflows/deploy.yml` 自动构建发布 |
-| 后端 | 免费容器平台（Hugging Face Spaces / Render 等） | 用 `backend/Dockerfile`；需要长驻进程，Pages 跑不了 Python |
+| 后端（可选） | 支持 Docker 的平台（见 11.2 的对比表） | 需要长驻进程；Pages 跑不了 Python |
 
 ### 11.1 前端（GitHub Pages）
 
@@ -310,10 +318,34 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss ^
 
 ### 11.2 后端
 
-用 `backend/Dockerfile` 构建。
+用 `backend/Dockerfile`，任何支持 Docker / 长驻进程的平台都能跑。
 
-- **Hugging Face Spaces**：新建 Docker Space，把 `backend/` 里的内容推到该 Space 仓库的**根目录**（HF 要求 Dockerfile 在仓库根）
-- **Render**：Root Directory 填 `backend`，它会用这个 Dockerfile
+> **先看一个现实**：免费额度够用、又能在大陆直接访问的平台很少。下面这张表是实际核对过的
+> （不同时期政策会变，注册前请以官网为准）：
+
+| 平台 | 有免费计算资源吗 | 大陆可访问性 | 备注 |
+|---|---|---|---|
+| 阿里云函数计算 FC | 有（按量计费，闲置近乎免费） | ✅ 最稳 | Serverless，需实名；原生支持 FastAPI |
+| 腾讯云 CloudBase / SCF | 有（免费版需领兑换券） | ✅ 稳定 | 需实名，微信/QQ 扫码登录 |
+| Render | 有（Web 服务 750 小时/月） | ⚠️ 控制台与 `onrender.com` 有时不稳 | 闲置 15 分钟休眠，冷启约 60s |
+| Hugging Face Spaces | 有（免费 CPU 档） | ❌ 大陆常无法登录 | — |
+| Zeabur | **没有** | 后台中文、访问较快 | 注意：$0 计划**只能管理自有服务器**，跑服务需 $5/月 |
+| Vercel | 有 | ⚠️ 不稳 | Serverless 无持久文件系统 + 单请求 60s 超时，**本项目的 SQLite 方案不适用** |
+
+> **如果只是要一个"能看的演示"，不部署后端反而更划算**：把数据导出成静态 JSON 交给
+> Pages 直接托管——零平台依赖、不休眠、大陆打开更快。代价是抓取 / 上传 / 新跑定制化不可用
+> （这些在 `DEMO_MODE` 下本来也关了大部分）。
+
+> **完整的 Hugging Face Spaces 部署步骤**（建 Space、令牌、环境变量、常见报错）见
+> [docs/deploy-huggingface.md](docs/deploy-huggingface.md)；
+> 用 `scripts/prepare_hf_space.py` 可以一键生成符合 HF 要求的仓库目录。
+
+选定平台后的步骤：
+
+1. 用 `backend/Dockerfile` 构建 —— Hugging Face Spaces 需要把 `backend/` 的内容推到
+   Space 仓库根目录（HF 要求 Dockerfile 在根）；Render 则把 Root Directory 填 `backend`
+2. 配置下面的环境变量
+3. 拿到分配的公网域名，填进 GitHub 仓库变量 `VITE_API_BASE`（见 11.1）
 
 需要配置的环境变量：
 
@@ -351,6 +383,37 @@ backend\.venv\Scripts\python.exe scripts\export_demo_seed.py
 | 按已抓取的原文重新解析 | 抓取岗位、改模型配置 |
 
 前端读 `/health` 的 `demo_mode` 字段，在顶部显示黄色横幅告知访客哪些操作被关闭。
+
+### 11.5 纯静态演示模式（无后端）
+
+GitHub Pages 只能托管静态文件，跑不了 FastAPI。为了让演示站不依赖任何后端，
+把后端数据**预导出成 JSON**，前端加一层「离线数据源」在浏览器里应答请求：
+
+```
+frontend/public/demo-data/
+  health.json            健康检查（demo_mode=true）
+  jobs.json              4825 条岗位（JD 正文截断到 300 字）
+  facets.json            筛选项计数（城市/学历/来源/薪资区间）
+  resumes.json           简历列表 + 详情
+  customizations.json    定制化任务列表 + 报告详情
+  llm-providers.json     模型配置（只读展示）
+```
+
+实现位置：`frontend/src/demoData.ts`（筛选/排序/分页逻辑照抄
+`backend/app/services/jd_service.py`，保证与线上行为一致）+ `frontend/src/api.ts`
+里的一处分流（`VITE_STATIC_DEMO=true` 时改走本地数据源）。
+
+重新导出（数据更新后跑一次，产物需要提交进仓库）：
+
+```bat
+backend\.venv\Scripts\python.exe scripts\export_static_demo.py
+```
+
+体积参考：原始 JSON 约 6.8 MB，**gzip 后约 1.2 MB**；其中 `jobs.json` 只在进入
+「在招岗位」页时才加载，首页只需约 5 KB。
+
+**已知取舍**：静态模式下 JD 正文只保留前 300 字（文件里会附一句说明），
+抓取 / 上传 / 发起新定制化不可用 —— 完整功能请本地运行或用真实后端。
 
 ## 12. 说明
 

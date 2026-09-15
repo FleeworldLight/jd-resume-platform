@@ -10,6 +10,7 @@
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | [deployment/local.md](deployment/local.md) | 本地启动（start.bat / 手动） | ✅ 当前 |
+| [deploy-huggingface.md](deploy-huggingface.md) | 后端部署到 Hugging Face Spaces（含备选平台） | ✅ 当前 |
 | [architecture/error-handling.md](architecture/error-handling.md) | 异常体系与统一 `Result[T]` 响应 | ✅ 当前 |
 | [modules/jd.md](modules/jd.md) | JD 模块（粘贴 / 抓取 / 结构化） | ✅ 当前 |
 | [modules/llm-provider.md](modules/llm-provider.md) | LLM Provider 模块 | ✅ 当前 |

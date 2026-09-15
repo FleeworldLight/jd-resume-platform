@@ -1,10 +1,12 @@
 // fetch wrapper: 拆 Result 包，错误抛 ApiError
 import type { Result } from "./types";
+import { DemoUnsupported, demoRequest, demoWriteBlocked, isStaticDemo } from "./demoData";
 
 // 后端地址：
 //   - 本地开发：留空 → 走 vite proxy（/api、/health 代理到 127.0.0.1:8000）
 //   - 部署到 GitHub Pages：必须填绝对 URL（跨域），由构建时注入
 //       VITE_API_BASE=https://your-backend.example.com npm run build
+//   - 纯静态演示（无后端）：设 VITE_STATIC_DEMO=true，请求改由 demoData 本地应答
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export class ApiError extends Error {
@@ -17,12 +19,25 @@ export class ApiError extends Error {
   }
 }
 
+/** 把离线数据源抛出的错误统一包成 ApiError，页面侧的展示逻辑不用改 */
+async function requestDemo<T>(method: string, path: string): Promise<T> {
+  if (method !== "GET") demoWriteBlocked();
+  try {
+    return (await demoRequest(path)) as T;
+  } catch (e) {
+    if (e instanceof DemoUnsupported) throw new ApiError(-1, e.message);
+    throw e;
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   init?: RequestInit,
 ): Promise<T> {
+  if (isStaticDemo()) return requestDemo<T>(method, path);
+
   const headers: Record<string, string> = {
     Accept: "application/json",
   };
@@ -83,6 +98,9 @@ export const api = {
     return request<T>("POST", path, fd);
   },
   download: async (path: string, filename: string) => {
+    if (isStaticDemo()) {
+      throw new ApiError(-1, "静态演示站不提供文件下载，请克隆仓库本地运行。");
+    }
     const res = await fetch(BASE + path);
     const ct = res.headers.get("content-type") || "";
     // 后端把业务异常也包成 HTTP 200 + Result JSON，
@@ -109,6 +127,9 @@ export const api = {
     URL.revokeObjectURL(url);
   },
   downloadPdf: async (id: number) => {
+    if (isStaticDemo()) {
+      throw new ApiError(-1, "静态演示站不提供 PDF 导出，请克隆仓库本地运行。");
+    }
     const res = await fetch(`${BASE}/api/customizations/${id}/pdf`);
     if (!res.ok) throw new ApiError(-1, `PDF 下载失败: HTTP ${res.status}`);
     const blob = await res.blob();

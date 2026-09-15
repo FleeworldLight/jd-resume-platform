@@ -11,6 +11,9 @@
 | [verify_jds.py](verify_jds.py) | 校验库内岗位数据与真实页面一致 | 静态部分不联网 | ❌ 只读 |
 | [dedupe_jds.py](dedupe_jds.py) | 合并 URL 规范化后重复的岗位行 | ❌ | ⚠️ 默认只预览，`--apply` 才写 |
 | [boss_login.py](boss_login.py) | 打开浏览器登录 Boss，保存会话供抓取复用 | ✅ | 只写会话文件 |
+| [export_demo_seed.py](export_demo_seed.py) | 导出**脱敏种子库**（部署用，含 PII 闸门） | ❌ | 只写 `backend/seed/` |
+| [export_static_demo.py](export_static_demo.py) | 导出**静态演示 JSON**（Pages 无后端时用） | ❌ | 只写 `frontend/public/demo-data/` |
+| [prepare_hf_space.py](prepare_hf_space.py) | 生成可直接推送到 Hugging Face Spaces 的目录 | ❌ | 只写仓库外的 `_hf_space/` |
 
 ## crawl_jobs.py —— 批量抓取
 
@@ -58,7 +61,6 @@ backend\.venv\Scripts\python.exe scripts\dedupe_jds.py --apply    REM 确认后�
 **默认只打印预览，不加 `--apply` 不会动数据库。**
 
 ## boss_login.py —— Boss 直聘登录态
-
 ```bat
 backend\.venv\Scripts\python.exe scripts\boss_login.py --check   REM 检查依赖与配置
 backend\.venv\Scripts\python.exe scripts\boss_login.py           REM 打开浏览器手动登录
@@ -69,6 +71,43 @@ backend\.venv\Scripts\python.exe scripts\boss_login.py           REM 打开浏�
 
 > **风险自担**：Boss 的 robots 明确不欢迎抓取搜索结果，用账号自动化访问最坏情况是账号被风控。
 > 项目**不做任何绕过**（不换 IP、不破解签名、不伪造指纹）。
+
+## export_demo_seed.py —— 导出脱敏种子库（部署用）
+
+```bat
+backend\.venv\Scripts\python.exe scripts\export_demo_seed.py
+```
+
+产出 `backend/seed/demo_seed.db`（约 12MB，**需要提交进仓库**）。
+免费云平台的磁盘是临时的，后端启动时若发现数据文件不存在，会直接复制这份种子库
+（见 `backend/app/db/init_db.py`），从而实现「冷启动即有数据」。
+
+做法是 `VACUUM INTO` 整库复制后在副本里做减法（清空 `source_url`、只留虚构简历与
+mock provider），并内置 **JSON 感知的 PII 闸门**——命中姓名/手机/邮箱/GitHub/学校
+等关键词就报错退出、**不产出种子库**。
+
+## export_static_demo.py —— 导出静态演示 JSON（Pages 用）
+
+```bat
+backend\.venv\Scripts\python.exe scripts\export_static_demo.py
+```
+
+产出 `frontend/public/demo-data/*.json`（**需要提交进仓库**）。
+GitHub Pages 上没有后端时，前端 `src/demoData.ts` 会读这些文件在浏览器里应答请求，
+所以演示站不依赖任何服务器也能看完整界面。
+
+不手写字段映射，而是**用进程内的 ASGI 客户端调用真实接口**再落盘，
+保证导出结构与线上接口逐字段一致。产出约 6.8MB（gzip 后约 1.2MB）。
+
+## prepare_hf_space.py —— 准备 Hugging Face Space 目录
+
+```bat
+backend\.venv\Scripts\python.exe scripts\prepare_hf_space.py
+```
+
+HF Spaces 要求 **Dockerfile 位于仓库根**、且根目录要有带 YAML front-matter 的
+`README.md`（声明 `sdk: docker`）。本脚本把这些收拾好，在**仓库外**生成 `_hf_space/`，
+之后 `cd` 进去 `git push` 即可。详细步骤见 [docs/deploy-huggingface.md](../docs/deploy-huggingface.md)。
 
 ## 通用注意
 
