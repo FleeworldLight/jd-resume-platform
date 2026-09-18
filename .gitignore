@@ -46,3 +46,11 @@ frontend/.vite/
 # 注意：该目录仅作参考，请勿修改其中内容
 Lujie-Careerkit-main/
 Lujie-Careerkit-main.zip
+
+# 构建 / 工具缓存（这两条曾经被误提交过，务必保留）
+.vite/
+.playwright/
+
+# 临时导出的数据文件 —— 用 查看.py / scripts 里的脚本随时可重新生成，不进仓库
+jds_export.csv
+export_*.csv
