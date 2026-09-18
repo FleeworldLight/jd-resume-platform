@@ -97,7 +97,7 @@ export const api = {
     fd.append("file", file);
     return request<T>("POST", path, fd);
   },
-  download: async (path: string, filename: string) => {
+  download: async (path: string, fallbackName: string) => {
     if (isStaticDemo()) {
       throw new ApiError(-1, "静态演示站不提供文件下载，请克隆仓库本地运行。");
     }
@@ -116,6 +116,17 @@ export const api = {
       }
       throw new ApiError(res.status || -1, msg);
     }
+    // 文件名优先用后端给的（中文岗位名已按 RFC 5987 编码）
+    let filename = fallbackName;
+    const cd = res.headers.get("content-disposition") || "";
+    const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if (m) {
+      try {
+        filename = decodeURIComponent(m[1]);
+      } catch {
+        /* 解码失败则用兜底名 */
+      }
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -126,18 +137,13 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
-  downloadPdf: async (id: number) => {
-    if (isStaticDemo()) {
-      throw new ApiError(-1, "静态演示站不提供 PDF 导出，请克隆仓库本地运行。");
-    }
-    const res = await fetch(`${BASE}/api/customizations/${id}/pdf`);
-    if (!res.ok) throw new ApiError(-1, `PDF 下载失败: HTTP ${res.status}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `customization_${id}.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
-  },
+  /** 简历 PDF —— 可直接投递（未确认的建议会带「未证实·待确认」标记） */
+  downloadResumePdf: (id: number) =>
+    api.download(`/api/customizations/${id}/pdf`, `定制简历_${id}.pdf`),
+  /** 简历 DOCX —— 可继续用 Word / WPS 编辑 */
+  downloadResumeDocx: (id: number) =>
+    api.download(`/api/customizations/${id}/docx`, `定制简历_${id}.docx`),
+  /** 分析报告 PDF —— 差距分析 / 定制说明 / 面试押题 / 召回指标 */
+  downloadReportPdf: (id: number) =>
+    api.download(`/api/customizations/${id}/report.pdf`, `定制分析报告_${id}.pdf`),
 };

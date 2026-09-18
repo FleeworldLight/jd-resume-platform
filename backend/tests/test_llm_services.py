@@ -22,11 +22,20 @@ from app.schemas.customization import (
     MissingSkill,
     PredictedQuestion,
     StarAnswer,
+    Suggestion,
+    TailoredResume,
+)
+from app.schemas.resume_content import (
+    ResumeBasics,
+    ResumeContent,
+    ResumeItem,
+    ResumeProfile,
 )
 from app.services.customize_service import CustomizeService
 from app.services.gap_analysis_service import GapAnalysisService
 from app.services.llm_service import _build_mock_output
 from app.services.predict_service import PredictService
+from app.services.tailor_pipeline import tailored_to_text
 
 
 def _make_llm(return_value, provider_type: str = "openai"):
@@ -97,27 +106,46 @@ async def test_gap_analysis_calls_llm_and_returns() -> None:
 
 @pytest.mark.asyncio
 async def test_customize_service_returns_resume() -> None:
-    expected = CustomizedResume(
-        summary="资深 Python 后端，3 年经验。",
-        skills=["Python", "SQL"],
-        experiences=[
-            Experience(
-                title="后端工程师",
-                company="Acme",
-                duration="2020-2023",
-                description="做后端",
-            )
+    """LLM 路径：产物是一份简历（content），且候选句必须被强制置为未确认。"""
+    expected = TailoredResume(
+        content=ResumeContent(
+            basics=ResumeBasics(name="张三", phone="13800138000"),
+            profile=ResumeProfile(
+                title="Python 后端", summary="资深 Python 后端，3 年经验。"
+            ),
+            experiences=[
+                ResumeItem(
+                    title="后端工程师",
+                    org="Acme",
+                    role="核心开发",
+                    start="2020-01",
+                    end="2023-06",
+                    description="负责订单服务",
+                    highlights=["QPS 提升 3 倍"],
+                    tech_stack=["Python", "Kafka"],
+                )
+            ],
+            skills=["Python", "SQL"],
+        ),
+        target_position="Python 后端",
+        # 故意让模型把候选句标成「已确认」——服务层必须强制改回未确认
+        suggestions=[
+            Suggestion(id="s01", skill="K8s", text="引入 K8s", confirmed=True)
         ],
-        education=[Education(school="X", major="CS", degree="本科", duration="2016-2020")],
     )
     llm = _make_llm(expected)
     svc = CustomizeService(llm)
     gap = GapReport(match_score=80)
 
     out = await svc.customize(_make_jd(), _make_resume(), gap)
-    assert out.summary.startswith("资深")
-    assert len(out.experiences) == 1
+
+    assert out.content.profile.summary.startswith("资深")
+    assert out.content.basics.name == "张三"
+    assert len(out.content.experiences) == 1
+    assert out.content.experiences[0].highlights == ["QPS 提升 3 倍"]
     assert out.extract_mode == "llm"
+    # 诚实兜底：模型无论如何标注，候选句都不能算「已确认」
+    assert out.suggestions and all(not s.confirmed for s in out.suggestions)
 
 
 @pytest.mark.asyncio
@@ -135,7 +163,13 @@ async def test_predict_service_returns_questions() -> None:
     )
     llm = _make_llm(expected)
     svc = PredictService(llm)
-    customized = CustomizedResume(summary="x", skills=["Python"])
+    customized = TailoredResume(
+        content=ResumeContent(
+            profile=ResumeProfile(title="后端", summary="3 年 Python 经验"),
+            skills=["Python"],
+        ),
+        target_position="Python 后端",
+    )
 
     out = await svc.predict(_make_jd(), customized, question_count=3)
     assert out.questions[0].difficulty == "HARD"
@@ -162,16 +196,27 @@ async def test_gap_analysis_uses_rules_when_mock() -> None:
 
 @pytest.mark.asyncio
 async def test_customize_uses_rules_when_mock_and_invents_nothing() -> None:
+    """mock 路径：产物是一份简历；JD 要求而简历没有的只能变成未确认候选句。"""
     llm = _make_llm(None, provider_type="mock")
     svc = CustomizeService(llm)
-    gap = GapReport(match_score=50, matched_skills=["Python"])
+    gap = GapReport(
+        match_score=50,
+        matched_skills=["Python"],
+        missing_skills=[MissingSkill(skill="Kafka", priority="HIGH", reason="JD 要求")],
+    )
 
     out = await svc.customize(_make_jd(), _make_resume(), gap)
 
     assert out.extract_mode == "heuristic"
-    assert "Python" in out.skills
+    assert "Python" in out.content.skills
     # 简历文本里没有带时间段的经历块 → 不能凭空造经历
-    assert out.experiences == []
+    assert out.content.experiences == []
+    # JD 要 Kafka 但简历没写 → 只能进候选句，且默认未确认
+    assert [s.skill for s in out.suggestions] == ["Kafka"]
+    assert all(not s.confirmed for s in out.suggestions)
+    # 最硬的一条：导出「已确认内容」时，未证实的 Kafka 绝不能出现在简历里
+    assert "Kafka" not in tailored_to_text(out, include_unconfirmed=False)
+    assert "Kafka" in tailored_to_text(out, include_unconfirmed=True)
     llm.structured_invoke.assert_not_awaited()
 
 

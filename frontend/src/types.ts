@@ -171,12 +171,98 @@ export interface Customization {
   updated_at: string;
 }
 
+// ---------- 定制化产物：一份简历 + 定制元信息 ----------
+export interface ResumeBasics {
+  name: string;
+  phone: string;
+  email: string;
+  city: string;
+  age: string;
+  links: string[];
+}
+
+export interface ResumeProfile {
+  title: string;
+  tagline: string;
+  summary: string;
+  highlights: string[];
+}
+
+export interface ResumeItem {
+  title: string;
+  org: string;
+  role: string;
+  start: string;
+  end: string;
+  description: string;
+  highlights: string[];
+  tech_stack: string[];
+}
+
+export interface ResumeEducation {
+  school: string;
+  major: string;
+  degree: string;
+  start: string;
+  end: string;
+  highlights: string[];
+}
+
+export interface ResumeContent {
+  basics: ResumeBasics;
+  profile: ResumeProfile;
+  education: ResumeEducation[];
+  experiences: ResumeItem[];
+  projects: ResumeItem[];
+  skills: string[];
+  awards: string[];
+  extras: string[];
+  parse_note: string;
+}
+
+export interface SkillGroup {
+  category: string;
+  items: string[];
+}
+
+/** 待逐条确认的补足建议：确认前不进简历正文（导出时带「未证实·待确认」标记）。 */
+export interface TailorSuggestion {
+  id: string;
+  target: string;
+  target_label: string;
+  skill: string;
+  text: string;
+  reason: string;
+  priority: "HIGH" | "MEDIUM" | "LOW";
+  confirmed: boolean;
+}
+
+export interface RankingEntry {
+  section: "experiences" | "projects";
+  index: number;
+  title: string;
+  score: number;
+  matched_skills: string[];
+}
+
+export interface TailoredResume {
+  content: ResumeContent;
+  target_position: string;
+  skill_groups: SkillGroup[];
+  tailor_notes: string[];
+  suggestions: TailorSuggestion[];
+  ranking: RankingEntry[];
+  extract_mode?: string | null;
+}
+
 export interface CustomizationDetail extends Customization {
   gap_report: Record<string, unknown> | null;
   customized_resume: Record<string, unknown> | null;
   prediction: Record<string, unknown> | null;
   retrieval_metrics: Record<string, unknown> | null;
   matched_resumes: unknown[] | null;
+  /** 简历正文纯文本（后端按 confirmed 状态渲染好，前端直接展示） */
+  resume_text: string | null;
 }
 
 export interface CustomizationStatus {
@@ -187,6 +273,8 @@ export interface CustomizationStatus {
   has_gap: boolean;
   has_resume: boolean;
   has_prediction: boolean;
+  suggestion_total: number;
+  suggestion_confirmed: number;
 }
 
 export interface LlmProvider {

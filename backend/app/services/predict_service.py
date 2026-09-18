@@ -1,13 +1,19 @@
-"""押题 Service。"""
+"""押题 Service。
+
+注意：送给模型的简历文本**只含已被确认的真实内容**
+（``include_unconfirmed=False``）—— 未证实的候选句不能成为面试题的立足点，
+否则等于让模型基于编造内容出题。
+"""
 from __future__ import annotations
 
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging import get_logger
 from app.db.models.jd import Jd
 from app.prompts import PREDICT_PROMPT_V1
-from app.schemas.customization import CustomizedResume, GapReport, InterviewPrediction
+from app.schemas.customization import GapReport, InterviewPrediction, TailoredResume
 from app.services.heuristic_pipeline import predict_questions
 from app.services.llm_service import LLMService
+from app.services.tailor_pipeline import tailored_to_text
 
 logger = get_logger(__name__)
 
@@ -19,7 +25,7 @@ class PredictService:
     async def predict(
         self,
         jd: Jd,
-        customized_resume: CustomizedResume,
+        customized_resume: TailoredResume,
         question_count: int = 5,
         gap: GapReport | None = None,
     ) -> InterviewPrediction:
@@ -36,11 +42,12 @@ class PredictService:
                 result.extract_mode = "heuristic"
                 return result
 
+            resume_text = tailored_to_text(customized_resume, include_unconfirmed=False)
             result = await self.llm.structured_invoke(
                 prompt_template=PREDICT_PROMPT_V1,
                 input_vars={
                     "jd_text": jd.raw_text or "",
-                    "customized_resume": customized_resume.model_dump_json(),
+                    "customized_resume": resume_text,
                     "question_count": question_count,
                 },
                 output_schema=InterviewPrediction,

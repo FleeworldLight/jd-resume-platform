@@ -29,7 +29,12 @@
 [前端轮询]
   GET /api/customizations/{id}/status
   ↓ COMPLETED
-[展示报告 + 可导出 PDF]
+[展示简历预览 + 逐条确认补足建议]
+  ↓
+[三个导出端点]
+  GET /api/customizations/{id}/pdf          → 简历 PDF（可直接投递）
+  GET /api/customizations/{id}/docx         → 简历 DOCX（可再编辑）
+  GET /api/customizations/{id}/report.pdf   → 分析报告 PDF（差距/押题/指标）
 ```
 
 ---
@@ -486,7 +491,28 @@ def customize_resume_task(self, customization_id: int):
 
 ---
 
-## 7. PDF 导出
+## 7. 导出（2026-09 改版：产物是「简历」，不是「报告」）
+
+> **产物形态已变更**。旧版把简历正文、差距分析、押题、召回指标塞进同一份
+> 「定制化报告」，用户拿到的不是能投递的东西。现在拆成两个独立文件：
+>
+> | 端点 | 产物 | 实现 |
+> |---|---|---|
+> | `GET /{id}/pdf` | **简历 PDF**（可直接投递） | `render_resume_pdf()` ← `tailor_pipeline.tailored_to_text()` |
+> | `GET /{id}/docx` | **简历 DOCX**（可继续用 Word 编辑） | `app/utils/docx.py:render_text_docx()` |
+> | `GET /{id}/report.pdf` | **分析报告 PDF**（差距/定制说明/押题/指标） | `render_customization_pdf()` |
+> | `POST /{id}/suggestions` | 逐条确认 / 驳回补足建议 | `CustomizationService.set_suggestions()` |
+>
+> **诚实边界**：岗位要求而简历没有依据的内容，只以「候选句」形式存在
+> （`suggestions[].confirmed=false`），导出时渲染为 `〔未证实·待确认〕`；
+> 用户确认后才转正、标记消失。`tailored_to_text(..., include_unconfirmed=False)`
+> 可导出「只含已证实内容」的版本，押题服务用的就是这一版，避免让模型基于编造内容出题。
+>
+> 历史数据：旧版报告格式的记录没有 `content` 键，接口会明确报错提示重新发起定制化。
+>
+> ---
+>
+> 下方为 v1 设计稿（WeasyPrint + HTML 模板），**已不再使用**，仅作历史留档。
 
 ```python
 # app/utils/pdf.py

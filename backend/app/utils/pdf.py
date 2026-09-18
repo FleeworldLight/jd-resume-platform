@@ -68,13 +68,68 @@ def render_customization_pdf(c: Customization) -> bytes:
     metrics = c.retrieval_metrics or {}
     h = metrics.get("hybrid") or {}
 
+    # —— 定制说明：只讲「改了什么 / 还差什么」，简历正文在另一份文件里 ——
+    notes = customized.get("tailor_notes") or []
+    suggestions = customized.get("suggestions") or []
+    ranking = customized.get("ranking") or []
+    tailor: list[Any] = []
+    if notes:
+        tailor.append(Paragraph("<b>本次做了什么</b>", _S["body"]))
+        tailor += _bullets(notes)
+    if ranking:
+        tailor.append(Paragraph("<b>经历与岗位相关度</b>", _S["body"]))
+        for r in ranking[:10]:
+            hit = "、".join(r.get("matched_skills") or []) or "无直接命中"
+            tailor.append(
+                Paragraph(
+                    f"• [{r.get('score', 0)} 分] {_esc(r.get('title', ''))}（{_esc(hit)}）",
+                    _S["body"],
+                )
+            )
+    if suggestions:
+        pending = [s for s in suggestions if not s.get("confirmed")]
+        tailor.append(
+            Paragraph(
+                f"<b>待确认的补充建议：{len(pending)} 项未确认 / 共 {len(suggestions)} 项</b>",
+                _S["body"],
+            )
+        )
+        for s in suggestions:
+            tag = "已确认" if s.get("confirmed") else "未证实·待确认"
+            tailor.append(
+                Paragraph(
+                    f"• [{_esc(s.get('priority', ''))}][{tag}] "
+                    f"{_esc(s.get('skill', ''))} → {_esc(s.get('target_label', ''))}",
+                    _S["body"],
+                )
+            )
+            if s.get("text"):
+                tailor.append(
+                    Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{_esc(s['text'])}", _S["body"])
+                )
+            if s.get("reason"):
+                tailor.append(
+                    Paragraph(
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;依据：{_esc(s['reason'])}", _S["body"]
+                    )
+                )
+    if not tailor:
+        tailor.append(
+            Paragraph(
+                "本条记录生成于旧版（报告格式），缺少定制说明字段；"
+                "重新发起一次定制化即可得到新版产物。",
+                _S["body"],
+            )
+        )
+
     story: list[Any] = [
-        Paragraph(f"定制化报告 #{c.id}", _S["title"]),
+        Paragraph(f"定制化分析报告 #{c.id}", _S["title"]),
         Paragraph(
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
             f"状态: {_esc(c.status)} · Provider: {_esc(c.provider_used or 'default')}",
             _S["meta"],
         ),
+        Paragraph("简历正文请见单独导出的「简历」PDF / DOCX，本文件只做分析。", _S["meta"]),
         Spacer(1, 8),
         Paragraph("1. 差距分析", _S["h1"]),
         Paragraph(f"{gap.get('match_score', 0)} / 100", _S["score"]),
@@ -85,9 +140,8 @@ def render_customization_pdf(c: Customization) -> bytes:
         Paragraph("<b>建议重点</b>", _S["body"]),
         *_bullets(gap.get("recommended_focus", [])),
         Spacer(1, 8),
-        Paragraph("2. 定制版简历", _S["h1"]),
-        Paragraph("<b>个人简介：</b>" + _esc(customized.get("summary", "")), _S["body"]),
-        Paragraph("<b>核心技能：</b>" + _esc("、".join(customized.get("skills", []))), _S["body"]),
+        Paragraph("2. 定制说明", _S["h1"]),
+        *tailor,
         Spacer(1, 4),
         Paragraph("3. 面试预测", _S["h1"]),
         *_render_questions(prediction.get("questions", [])),
@@ -168,7 +222,9 @@ def render_resume_pdf(text: str, title: str = "简历") -> bytes:
         title=title,
     )
 
-    story: list[Any] = [Paragraph(_esc(title), _S_RESUME["title"]), Spacer(1, 4)]
+    story: list[Any] = []
+    if title:
+        story += [Paragraph(_esc(title), _S_RESUME["title"]), Spacer(1, 4)]
     for raw_line in (text or "").splitlines():
         line = raw_line.rstrip()
         if not line.strip():

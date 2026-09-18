@@ -38,6 +38,55 @@ class CustomizationService:
         self.customize = CustomizeService(llm_service)
         self.predict = PredictService(llm_service)
 
+    # ---------- 候选句确认（简历「补足」的唯一闸门） ----------
+    async def set_suggestions(
+        self,
+        customization_id: int,
+        ids: list[str] | None = None,
+        confirmed: bool = True,
+    ) -> Customization:
+        """逐条确认 / 驳回「补足建议」。
+
+        ``ids`` 为空表示全部。只改 ``customized_resume.suggestions[].confirmed``，
+        简历正文（``content``）不受影响 —— 导出时按 ``confirmed`` 决定
+        该条是「正常内容」还是带「〔未证实·待确认〕」标记。
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        c = await self._get_customization(customization_id)
+        data = dict(c.customized_resume or {})
+        items = list(data.get("suggestions") or [])
+        if not items:
+            raise BusinessException(
+                ErrorCode.CUSTOMIZATION_INVALID_INPUT,
+                "该定制记录没有待确认的建议（旧版报告格式请重新发起定制化）",
+            )
+
+        target = set(ids) if ids else None
+        changed = 0
+        new_items: list[dict] = []
+        for s in items:
+            item = dict(s)
+            if target is None or item.get("id") in target:
+                if bool(item.get("confirmed")) != confirmed:
+                    changed += 1
+                item["confirmed"] = confirmed
+            new_items.append(item)
+
+        # JSON 列必须整体赋一个「新对象」，原地改 dict 不会被 SQLAlchemy 检测到
+        data["suggestions"] = new_items
+        c.customized_resume = data
+        flag_modified(c, "customized_resume")
+        await self.db.commit()
+        await self.db.refresh(c)
+        logger.info(
+            "customization.suggestions",
+            id=customization_id,
+            changed=changed,
+            confirmed=confirmed,
+        )
+        return c
+
     # ---------- 创建任务 ----------
     async def create(
         self, jd_id: int, base_resume_id: int, question_count: int = 5
