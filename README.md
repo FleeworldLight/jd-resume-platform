@@ -43,6 +43,16 @@ start.bat
 4. 启动后端：`http://localhost:8000/docs`
 5. 启动前端：`http://localhost:5173`
 
+> **Python 解释器要求 3.10+**（依赖里的 numpy 2.x 装不上 3.8）。
+> 查找顺序：**项目所在盘**的 `X:\Python314\python.exe` → 各盘（C~H）的 `X:\Python314\python.exe`
+> → `py` 启动器。项目在 G: / E: 之间搬动都不用改脚本。
+>
+> **换盘不用手动修 venv**：脚本每次启动都会跑一次 `scripts/fix_venv_paths.py` 自愈：
+> - `Scripts\*.exe` 的 shebang 统一写成**裸名 `python.exe`**（启动器在自己所在目录找解释器，与盘符无关）；
+> - `pyvenv.cfg` 的 `home` 只在失效时才改写，且必须找到**版本匹配**的解释器（否则明确报错，不会硬指到错版本）。
+>
+> 想单独体检/修复也可以手动跑：`X:\Python314\python.exe scripts\fix_venv_paths.py [--apply]`。
+
 ## 4. 手动启动
 
 ### 后端
@@ -51,6 +61,9 @@ start.bat
 cd backend
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> 手动跑后端时，如果要用爬虫，先把浏览器目录指过去（`start.bat` 会自动设）：
+> `set PLAYWRIGHT_BROWSERS_PATH=%~dp0backend\.playwright`
 
 ### 前端
 
@@ -328,7 +341,7 @@ backend\.venv\Scripts\python.exe scripts\crawl_jobs.py --source boss ^
 | 阿里云函数计算 FC | 有（按量计费，闲置近乎免费） | ✅ 最稳 | Serverless，需实名；原生支持 FastAPI |
 | 腾讯云 CloudBase / SCF | 有（免费版需领兑换券） | ✅ 稳定 | 需实名，微信/QQ 扫码登录 |
 | Render | 有（Web 服务 750 小时/月） | ⚠️ 控制台与 `onrender.com` 有时不稳 | 闲置 15 分钟休眠，冷启约 60s |
-| Hugging Face Spaces | 有（免费 CPU 档） | ❌ 大陆常无法登录 | — |
+| Hugging Face Spaces | **已取消**（2026-07 起新建 Gradio/Docker Space 需 PRO $9/月）；免费只剩 Static 与 2 个 ZeroGPU Gradio | 换代理后可登录，但 `huggingface.co` 常不稳 | **ZeroGPU 还会拒掉纯 CPU 应用**（要求存在 `@spaces.GPU` 函数），详见 [docs/deploy-huggingface.md](docs/deploy-huggingface.md) 顶部说明 |
 | Zeabur | **没有** | 后台中文、访问较快 | 注意：$0 计划**只能管理自有服务器**，跑服务需 $5/月 |
 | Vercel | 有 | ⚠️ 不稳 | Serverless 无持久文件系统 + 单请求 60s 超时，**本项目的 SQLite 方案不适用** |
 

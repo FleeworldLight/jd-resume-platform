@@ -1,7 +1,38 @@
 # 把后端部署到 Hugging Face Spaces
 
+> ## ⛔ 先看这个：截至 2026-09，免费路线对本项目**已经不通**
+>
+> **① HF 在 2026 年 7 月静默改了政策**：新建 **Gradio / Docker Space 需要付费订阅**。
+> 免费账号创建时会返回：
+> *"Static Spaces are free for everyone, but hosting Gradio and Docker Spaces
+> on free cpu-basic requires a PRO subscription."*
+>
+> | 免费能建什么 | 说明 |
+> |---|---|
+> | Static Space | ✅ 无限，但只是静态托管（≈ 另一个 GitHub Pages），跑不了 Python |
+> | Gradio + ZeroGPU | ⚠️ 最多 2 个；且要求邮箱已验证 + 账号满 30 天 |
+> | Docker / CPU basic | ❌ 要 **PRO（$9/月）** |
+>
+> **② ZeroGPU 对纯 CPU 应用不适用**（本项目实测）。把 FastAPI 挂到 Gradio SDK 的
+> ZeroGPU Space 上，启动阶段会被直接拒掉：
+> ```
+> # runtime error
+> ## No @spaces.GPU function detected during startup
+> ```
+> 因为 ZeroGPU 硬性要求应用里存在 `@spaces.GPU` 装饰的函数。本项目不需要 GPU，
+> 为了绕过而**塞一个假的 GPU 函数属于欺骗平台**，不做。
+>
+> > 唯一的**正当**用法是让后端真在 GPU 上跑本地模型（替掉 mock provider）——
+> > 那是 ROADMAP 里 P2「接入真实模型」的活，不是为部署演示该做的事。
+>
+> **③ 官网文档与定价页至今仍写着 `CPU Basic | Free!`**，别信文档，信实测。
+>
+> **所以：本文档以下步骤仅在「你愿意付费 Pro」或「政策回滚」时才适用。**
+> 免费部署请改看 [「备选平台」](#9-备选平台hf-上不去的话) 一节，
+> 或直接用**纯静态演示模式**（README 第 11.5 节，不需要任何后端）。
+
 > 本文档面向本项目（FastAPI + SQLite 后端）。前端在 GitHub Pages，
-> 后端跑在 HF Spaces 的免费 Docker 容器里。
+> 后端跑在 HF Spaces 的容器里。
 >
 > **前提提醒**：Hugging Face 在大陆可能无法直接访问（需要自备网络条件）。
 > 如果实在上不去，见文末「备选平台」。
